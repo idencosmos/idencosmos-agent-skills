@@ -7,3 +7,7 @@ Place each public skill under:
 Example:
 
 - `skills/my-first-skill/SKILL.md`
+
+Current skills:
+
+- `skills/skills-batch-ops/SKILL.md`

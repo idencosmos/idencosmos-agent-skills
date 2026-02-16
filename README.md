@@ -14,6 +14,10 @@ npx skills add idencosmos/idencosmos-agent-skills --skill <skill-name> -y
 - `skills/<skill-name>/SKILL.md`: Each published skill.
 - `.github/workflows/`: CI checks for skill docs and structure.
 
+## Published Skills
+
+- `skills-batch-ops`: 운영형 배치 워크플로우로 프로젝트 요구사항 분석, 다중 채널(Find/Top/GitHub/Web) 후보 수집, 리뷰 매니페스트 승인 게이트, 승인 기반 설치, 감사 로그까지 일괄 수행.
+
 ## Development
 
 ```bash
