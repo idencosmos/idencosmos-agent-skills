@@ -196,6 +196,7 @@ GitHub 저장소 검색 후, `npx skills add <repo> --list`로 실제 스킬 후
 - `review_manifest.tsv` 승인 전 자동 설치 금지
 - 승인 대상은 가능한 한 최소 집합 유지
 - 설치 후 `audit.log` 확인
+- 검증/재실행 시 기존 run 디렉터리 재사용 금지 (`--out-dir`로 항상 새 경로 지정 권장)
 
 ## Fallback
 

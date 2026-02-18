@@ -1098,9 +1098,11 @@ cmd_run() {
 
   analyze_project "$project_root" "$signals_file" "$query_file"
 
-  for q in "${find_queries[@]}"; do
-    [[ -n "$q" ]] && printf '%s\n' "$q" >> "$query_file"
-  done
+  if [[ ${#find_queries[@]} -gt 0 ]]; then
+    for q in "${find_queries[@]}"; do
+      [[ -n "$q" ]] && printf '%s\n' "$q" >> "$query_file"
+    done
+  fi
   dedupe_lines_in_file "$query_file"
 
   while IFS= read -r q; do

@@ -253,9 +253,10 @@ EOF_MANIFEST
 }
 
 run_e2e_run_outputs() {
-  local tmp project
+  local tmp project run_dir
   tmp="$(mktemp -d)"
   project="$tmp/project"
+  run_dir="$tmp/run-explicit-queries"
   mkdir -p "$project/docs"
   setup_mock_env "$tmp"
 
@@ -274,12 +275,10 @@ EOF_BACKLOG
   SKILLS_BATCH_TOP_HTML_FILE="$FIXTURE_DIR/skills_home_sample.html" \
   "$SCRIPT_PATH" run \
     --project-root "$project" \
+    --out-dir "$run_dir" \
     --top 3 \
     --find-query "python testing" \
     --github-query "python observability" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
-
-  local run_dir
-  run_dir="$(ls -1d "$project/.agents/skills-batch-ops/runs/"* | sort | tail -n 1)"
 
   assert_file_exists "$run_dir/project_signals.md" || return 1
   assert_file_exists "$run_dir/query_seeds.txt" || return 1
@@ -288,6 +287,42 @@ EOF_BACKLOG
   assert_file_exists "$run_dir/candidates.github.tsv" || return 1
   assert_file_exists "$run_dir/candidates.merged.tsv" || return 1
   assert_file_exists "$run_dir/review_manifest.tsv" || return 1
+}
+
+run_e2e_run_outputs_auto_queries() {
+  local tmp project run_dir
+  tmp="$(mktemp -d)"
+  project="$tmp/project"
+  run_dir="$tmp/run-auto-queries"
+  mkdir -p "$project/docs"
+  setup_mock_env "$tmp"
+
+  cat > "$project/README.md" <<'EOF_README'
+# Demo
+This project uses python workers and observability.
+EOF_README
+
+  cat > "$project/docs/backlog.md" <<'EOF_BACKLOG'
+- Add test coverage
+- Improve retry handling
+EOF_BACKLOG
+
+  TEST_FIXTURE_DIR="$FIXTURE_DIR" \
+  PATH="$tmp/bin:$PATH" \
+  SKILLS_BATCH_TOP_HTML_FILE="$FIXTURE_DIR/skills_home_sample.html" \
+  "$SCRIPT_PATH" run \
+    --project-root "$project" \
+    --out-dir "$run_dir" \
+    --top 3 > "$tmp/stdout.auto.txt" 2> "$tmp/stderr.auto.txt" || return 1
+
+  assert_file_exists "$run_dir/project_signals.md" || return 1
+  assert_file_exists "$run_dir/query_seeds.txt" || return 1
+  assert_file_exists "$run_dir/candidates.find.tsv" || return 1
+  assert_file_exists "$run_dir/candidates.top.tsv" || return 1
+  assert_file_exists "$run_dir/candidates.github.tsv" || return 1
+  assert_file_exists "$run_dir/candidates.merged.tsv" || return 1
+  assert_file_exists "$run_dir/review_manifest.tsv" || return 1
+  awk 'NF{c++} END{exit !(c>0)}' "$run_dir/query_seeds.txt" || return 1
 }
 
 run_install_audit_log() {
@@ -314,6 +349,7 @@ run_test "merge dedupe and channels" run_merge_dedupe
 run_test "install-approved dry-run gate" run_install_approved_dry_run_gate
 run_test "install-approved no-approved" run_install_approved_no_approved
 run_test "run e2e artifacts" run_e2e_run_outputs
+run_test "run e2e artifacts with auto queries" run_e2e_run_outputs_auto_queries
 run_test "install-approved writes audit" run_install_audit_log
 
 log ""
