@@ -63,18 +63,6 @@ assert_row_count() {
   }
 }
 
-count_fixed_matches() {
-  local path="$1"
-  local text="$2"
-  local out
-  out="$(rg --fixed-strings -- "$text" "$path" 2>/dev/null || true)"
-  if [[ -z "$out" ]]; then
-    printf '0\n'
-    return
-  fi
-  printf '%s\n' "$out" | wc -l | tr -d ' '
-}
-
 setup_mock_env() {
   local dir="$1"
   mkdir -p "$dir/bin"
@@ -216,6 +204,50 @@ MOCK_NPX
   chmod +x "$dir/bin/npx"
 }
 
+build_discovery_queue_fixture() {
+  local out="$1"
+  cat > "$out" <<'EOF_Q'
+task_id	expected_stage	channel	project_root	project_intent_file	project_context_files	project_context_chunks	discovery_objective	output_contract
+D001	discovery	find	/tmp/project	/tmp/intent.json	/tmp/files.tsv	/tmp/chunks.ndjson	obj1	contract
+D002	discovery	github	/tmp/project	/tmp/intent.json	/tmp/files.tsv	/tmp/chunks.ndjson	obj2	contract
+EOF_Q
+}
+
+build_discovery_worker_success_fixture() {
+  local out="$1"
+  cat > "$out" <<'EOF_W'
+task_id	expected_stage	skill_ref	repo	skill	discovery_channels	discovery_evidence	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision	ai_recommended_status	ai_summary	ai_rationale	ai_reviewer	ai_reviewed_at	worker_run_id	worker_id	worker_started_at	worker_finished_at	worker_attempt	orchestrator_name
+D001	discovery	example/repo@skill-alpha	example/repo	skill-alpha	find	evidence-1	90	88	20	0.95	approve	approved	strong alpha	rationale-a	d-worker-a	2026-02-18T10:00:00Z	run-1	worker-1	2026-02-18T10:00:00Z	2026-02-18T10:02:00Z	1	orch-x
+D002	discovery	example/repo@skill-beta	example/repo	skill-beta	github	evidence-2	84	80	25	0.90	hold	pending	beta candidate	rationale-b	d-worker-b	2026-02-18T10:00:30Z	run-2	worker-2	2026-02-18T10:00:30Z	2026-02-18T10:03:30Z	1	orch-x
+EOF_W
+}
+
+build_discovery_worker_missing_coverage_fixture() {
+  local out="$1"
+  cat > "$out" <<'EOF_W'
+task_id	expected_stage	skill_ref	repo	skill	discovery_channels	discovery_evidence	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision	ai_recommended_status	ai_summary	ai_rationale	ai_reviewer	ai_reviewed_at	worker_run_id	worker_id	worker_started_at	worker_finished_at	worker_attempt	orchestrator_name
+D001	discovery	example/repo@skill-alpha	example/repo	skill-alpha	find	evidence-1	90	88	20	0.95	approve	approved	strong alpha	rationale-a	d-worker-a	2026-02-18T10:00:00Z	run-1	worker-1	2026-02-18T10:00:00Z	2026-02-18T10:02:00Z	1	orch-x
+EOF_W
+}
+
+build_discovery_worker_serial_fixture() {
+  local out="$1"
+  cat > "$out" <<'EOF_W'
+task_id	expected_stage	skill_ref	repo	skill	discovery_channels	discovery_evidence	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision	ai_recommended_status	ai_summary	ai_rationale	ai_reviewer	ai_reviewed_at	worker_run_id	worker_id	worker_started_at	worker_finished_at	worker_attempt	orchestrator_name
+D001	discovery	example/repo@skill-alpha	example/repo	skill-alpha	find	evidence-1	90	88	20	0.95	approve	approved	strong alpha	rationale-a	d-worker-a	2026-02-18T10:00:00Z	run-1	worker-1	2026-02-18T10:00:00Z	2026-02-18T10:01:00Z	1	orch-x
+D002	discovery	example/repo@skill-beta	example/repo	skill-beta	github	evidence-2	84	80	25	0.90	hold	pending	beta candidate	rationale-b	d-worker-b	2026-02-18T10:02:00Z	run-2	worker-1	2026-02-18T10:02:00Z	2026-02-18T10:03:00Z	1	orch-x
+EOF_W
+}
+
+build_discovery_worker_missing_metadata_fixture() {
+  local out="$1"
+  cat > "$out" <<'EOF_W'
+task_id	expected_stage	skill_ref	repo	skill	discovery_channels	discovery_evidence	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision	ai_recommended_status	ai_summary	ai_rationale	ai_reviewer	ai_reviewed_at	worker_run_id	worker_id	worker_started_at	worker_finished_at	worker_attempt	orchestrator_name
+D001	discovery	example/repo@skill-alpha	example/repo	skill-alpha	find	evidence-1	90	88	20	0.95	approve	approved	strong alpha	rationale-a	d-worker-a	2026-02-18T10:00:00Z		worker-1	2026-02-18T10:00:00Z	2026-02-18T10:02:00Z	1	orch-x
+D002	discovery	example/repo@skill-beta	example/repo	skill-beta	github	evidence-2	84	80	25	0.90	hold	pending	beta candidate	rationale-b	d-worker-b	2026-02-18T10:00:30Z	run-2	worker-2	2026-02-18T10:00:30Z	2026-02-18T10:03:30Z	1	orch-x
+EOF_W
+}
+
 # --------------------------
 # Process Tests
 # --------------------------
@@ -245,11 +277,13 @@ EOF_PY
   assert_file_exists "$run_dir/project_context.chunks.ndjson" || return 1
   assert_file_exists "$run_dir/project_intent.ai.json" || return 1
   assert_file_exists "$run_dir/review_discovery.queue.tsv" || return 1
+  assert_file_exists "$run_dir/run_contract.json" || return 1
   assert_file_exists "$run_dir/candidates.ai.tsv" || return 1
   assert_file_exists "$run_dir/review_manifest.tsv" || return 1
 
   assert_row_count "$run_dir/review_discovery.queue.tsv" 2 || return 1
-  assert_contains "$run_dir/project_context.files.tsv" "README.md" || return 1
+  assert_contains "$run_dir/review_discovery.queue.tsv" $'\tdiscovery\t' || return 1
+  assert_contains "$run_dir/run_contract.json" 'discovery_parallel_proof.tsv' || return 1
 }
 
 test_prepare_ai_discovery_process() {
@@ -278,31 +312,135 @@ EOF_INTENT
 
   assert_file_exists "$tmp/review_discovery.queue.tsv" || return 1
   assert_row_count "$tmp/review_discovery.queue.tsv" 4 || return 1
-  assert_contains "$tmp/review_discovery.queue.tsv" $'\tfind\t' || return 1
-  assert_contains "$tmp/review_discovery.queue.tsv" $'\tgithub\t' || return 1
+  assert_contains "$tmp/review_discovery.queue.tsv" $'\tdiscovery\tfind\t' || return 1
+  assert_contains "$tmp/review_discovery.queue.tsv" 'task_id	expected_stage	channel' || return 1
+}
+
+test_verify_parallel_proof_success_process() {
+  local tmp
+  tmp="$(mktemp -d)"
+
+  build_discovery_queue_fixture "$tmp/review_discovery.queue.tsv"
+  build_discovery_worker_success_fixture "$tmp/worker.tsv"
+
+  "$SCRIPT_PATH" verify-parallel-proof \
+    --stage discovery \
+    --queue "$tmp/review_discovery.queue.tsv" \
+    --out "$tmp/discovery_parallel_proof.tsv" \
+    --summary "$tmp/discovery_parallel_summary.json" \
+    "$tmp/worker.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
+
+  assert_file_exists "$tmp/discovery_parallel_proof.tsv" || return 1
+  assert_file_exists "$tmp/discovery_parallel_summary.json" || return 1
+  assert_contains "$tmp/discovery_parallel_summary.json" '"passed": true' || return 1
+  assert_contains "$tmp/discovery_parallel_summary.json" '"unique_workers": 2' || return 1
+  assert_contains "$tmp/discovery_parallel_summary.json" '"overlap_pairs": 1' || return 1
+}
+
+test_verify_parallel_proof_fail_coverage_process() {
+  local tmp
+  tmp="$(mktemp -d)"
+
+  build_discovery_queue_fixture "$tmp/review_discovery.queue.tsv"
+  build_discovery_worker_missing_coverage_fixture "$tmp/worker.tsv"
+
+  if "$SCRIPT_PATH" verify-parallel-proof \
+    --stage discovery \
+    --queue "$tmp/review_discovery.queue.tsv" \
+    --out "$tmp/discovery_parallel_proof.tsv" \
+    --summary "$tmp/discovery_parallel_summary.json" \
+    "$tmp/worker.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt"; then
+    log "assertion failed: expected coverage proof failure"
+    return 1
+  fi
+
+  assert_contains "$tmp/discovery_parallel_summary.json" 'missing_task_coverage' || return 1
+}
+
+test_verify_parallel_proof_fail_serial_process() {
+  local tmp
+  tmp="$(mktemp -d)"
+
+  build_discovery_queue_fixture "$tmp/review_discovery.queue.tsv"
+  build_discovery_worker_serial_fixture "$tmp/worker.tsv"
+
+  if "$SCRIPT_PATH" verify-parallel-proof \
+    --stage discovery \
+    --queue "$tmp/review_discovery.queue.tsv" \
+    --out "$tmp/discovery_parallel_proof.tsv" \
+    --summary "$tmp/discovery_parallel_summary.json" \
+    "$tmp/worker.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt"; then
+    log "assertion failed: expected serial proof failure"
+    return 1
+  fi
+
+  assert_contains "$tmp/discovery_parallel_summary.json" 'serial_execution_detected' || return 1
+  assert_contains "$tmp/discovery_parallel_summary.json" 'insufficient_unique_workers' || return 1
+}
+
+test_verify_parallel_proof_fail_missing_metadata_process() {
+  local tmp
+  tmp="$(mktemp -d)"
+
+  build_discovery_queue_fixture "$tmp/review_discovery.queue.tsv"
+  build_discovery_worker_missing_metadata_fixture "$tmp/worker.tsv"
+
+  if "$SCRIPT_PATH" verify-parallel-proof \
+    --stage discovery \
+    --queue "$tmp/review_discovery.queue.tsv" \
+    --out "$tmp/discovery_parallel_proof.tsv" \
+    --summary "$tmp/discovery_parallel_summary.json" \
+    "$tmp/worker.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt"; then
+    log "assertion failed: expected metadata proof failure"
+    return 1
+  fi
+
+  assert_contains "$tmp/discovery_parallel_summary.json" 'missing_worker_metadata' || return 1
+}
+
+test_merge_ai_discovery_requires_proof_process() {
+  local tmp
+  tmp="$(mktemp -d)"
+
+  build_discovery_worker_success_fixture "$tmp/worker.tsv"
+
+  if "$SCRIPT_PATH" merge-ai-discovery --out "$tmp/candidates.ai.tsv" --manifest "$tmp/review_manifest.tsv" "$tmp/worker.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt"; then
+    log "assertion failed: merge-ai-discovery should require --proof"
+    return 1
+  fi
+
+  assert_contains "$tmp/stderr.txt" 'requires --proof PATH' || return 1
 }
 
 test_merge_ai_discovery_process() {
   local tmp
   tmp="$(mktemp -d)"
 
+  build_discovery_queue_fixture "$tmp/review_discovery.queue.tsv"
+
   cat > "$tmp/worker1.tsv" <<'EOF_W1'
-skill_ref	repo	skill	discovery_channels	discovery_evidence	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision	ai_recommended_status	ai_summary	ai_rationale	ai_reviewer	ai_reviewed_at
-example/repo@skill-alpha	example/repo	skill-alpha	find	find evidence	80	78	30	0.70	hold	pending	candidate alpha	worker1 rationale	worker-1	2026-02-18T10:00:00Z
-example/repo@skill-beta	example/repo	skill-beta	github	github evidence	70	65	35	0.60	hold	pending	candidate beta	worker1 rationale	worker-1	2026-02-18T10:01:00Z
+task_id	expected_stage	skill_ref	repo	skill	discovery_channels	discovery_evidence	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision	ai_recommended_status	ai_summary	ai_rationale	ai_reviewer	ai_reviewed_at	worker_run_id	worker_id	worker_started_at	worker_finished_at	worker_attempt	orchestrator_name
+D001	discovery	example/repo@skill-alpha	example/repo	skill-alpha	find	find evidence	80	78	30	0.70	hold	pending	candidate alpha	worker1 rationale	worker-1	2026-02-18T10:00:00Z	run-1	worker-a	2026-02-18T10:00:00Z	2026-02-18T10:04:00Z	1	orch-x
+D002	discovery	example/repo@skill-beta	example/repo	skill-beta	github	github evidence	70	65	35	0.60	hold	pending	candidate beta	worker1 rationale	worker-1	2026-02-18T10:01:00Z	run-1	worker-b	2026-02-18T10:00:30Z	2026-02-18T10:03:30Z	1	orch-x
 EOF_W1
 
   cat > "$tmp/worker2.tsv" <<'EOF_W2'
-skill_ref	repo	skill	discovery_channels	discovery_evidence	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision	ai_recommended_status	ai_summary	ai_rationale	ai_reviewer	ai_reviewed_at
-example/repo@skill-alpha	example/repo	skill-alpha	github	github evidence alpha	90	88	22	0.92	approve	approved	strong candidate alpha	worker2 rationale	worker-2	2026-02-18T10:02:00Z
+task_id	expected_stage	skill_ref	repo	skill	discovery_channels	discovery_evidence	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision	ai_recommended_status	ai_summary	ai_rationale	ai_reviewer	ai_reviewed_at	worker_run_id	worker_id	worker_started_at	worker_finished_at	worker_attempt	orchestrator_name
+D001	discovery	example/repo@skill-alpha	example/repo	skill-alpha	github	github evidence alpha	90	88	22	0.92	approve	approved	strong candidate alpha	worker2 rationale	worker-2	2026-02-18T10:02:00Z	run-2	worker-c	2026-02-18T10:01:30Z	2026-02-18T10:04:30Z	1	orch-x
 EOF_W2
 
-  "$SCRIPT_PATH" merge-ai-discovery --out "$tmp/candidates.ai.tsv" --manifest "$tmp/review_manifest.tsv" "$tmp/worker1.tsv" "$tmp/worker2.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
+  "$SCRIPT_PATH" verify-parallel-proof \
+    --stage discovery \
+    --queue "$tmp/review_discovery.queue.tsv" \
+    --out "$tmp/discovery_parallel_proof.tsv" \
+    --summary "$tmp/discovery_parallel_summary.json" \
+    "$tmp/worker1.tsv" "$tmp/worker2.tsv" > "$tmp/proof.stdout.txt" 2> "$tmp/proof.stderr.txt" || return 1
+
+  "$SCRIPT_PATH" merge-ai-discovery --out "$tmp/candidates.ai.tsv" --manifest "$tmp/review_manifest.tsv" --proof "$tmp/discovery_parallel_summary.json" "$tmp/worker1.tsv" "$tmp/worker2.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
 
   assert_row_count "$tmp/candidates.ai.tsv" 2 || return 1
   assert_row_count "$tmp/review_manifest.tsv" 2 || return 1
   awk -F '\t' 'NR>1 && $1=="example/repo@skill-alpha" {exit !($4=="find,github" && $9=="0.92")}' "$tmp/candidates.ai.tsv" || return 1
-  awk -F '\t' 'NR>1 && $1=="example/repo@skill-alpha" {exit !($7=="pending")}' "$tmp/review_manifest.tsv" || return 1
 }
 
 test_validate_content_gate_process() {
@@ -371,31 +509,61 @@ EOF_INTENT
   "$SCRIPT_PATH" prepare-ai-reviews --manifest "$tmp/review_manifest.tsv" --content-report "$tmp/review_content.tsv" --project-intent "$tmp/project_intent.ai.json" --status pending --out "$tmp/review_ai.queue.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
 
   assert_row_count "$tmp/review_ai.queue.tsv" 1 || return 1
-  awk -F '\t' 'NR==2 {exit !($1=="example/repo@skill-alpha" && $7=="find project-fit skills" && $8=="autonomous-investment")}' "$tmp/review_ai.queue.tsv" || return 1
+  awk -F '\t' 'NR==2 {exit !($1=="R001" && $2=="review" && $3=="example/repo@skill-alpha" && $9=="find project-fit skills")}' "$tmp/review_ai.queue.tsv" || return 1
 
   "$SCRIPT_PATH" prepare-ai-reviews --manifest "$tmp/review_manifest.tsv" --content-report "$tmp/review_content.tsv" --project-intent "$tmp/project_intent.ai.json" --status pending --include-gate-fail --out "$tmp/review_ai_all.queue.tsv" > "$tmp/stdout2.txt" 2> "$tmp/stderr2.txt" || return 1
   assert_row_count "$tmp/review_ai_all.queue.tsv" 2 || return 1
+}
+
+test_merge_ai_reviews_requires_proof_process() {
+  local tmp
+  tmp="$(mktemp -d)"
+
+  cat > "$tmp/worker.tsv" <<'EOF_W'
+task_id	expected_stage	skill_ref	repo	skill	manifest_status	gate_status	gate_reason	project_goal	project_domain	project_constraints	discovery_summary	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision	ai_recommended_status	ai_summary	ai_rationale	ai_reviewer	ai_reviewed_at	worker_run_id	worker_id	worker_started_at	worker_finished_at	worker_attempt	orchestrator_name
+R001	review	example/repo@skill-alpha	example/repo	skill-alpha	pending	gate_pass	ok	goal	domain	[]	alpha	95	90	15	0.97	approve	approved	ready	rationale	reviewer	2026-02-18T11:00:00Z	run-1	worker-1	2026-02-18T11:00:00Z	2026-02-18T11:01:00Z	1	orch-y
+EOF_W
+
+  if "$SCRIPT_PATH" merge-ai-reviews --out "$tmp/review_ai.merged.tsv" "$tmp/worker.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt"; then
+    log "assertion failed: merge-ai-reviews should require --proof"
+    return 1
+  fi
+
+  assert_contains "$tmp/stderr.txt" 'requires --proof PATH' || return 1
 }
 
 test_merge_ai_reviews_process() {
   local tmp
   tmp="$(mktemp -d)"
 
+  cat > "$tmp/review_ai.queue.tsv" <<'EOF_Q'
+task_id	expected_stage	skill_ref	repo	skill	manifest_status	gate_status	gate_reason	project_goal	project_domain	project_constraints	discovery_summary	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision	ai_recommended_status	ai_summary	ai_rationale	ai_reviewer	ai_reviewed_at	worker_run_id	worker_id	worker_started_at	worker_finished_at	worker_attempt	orchestrator_name
+R001	review	example/repo@skill-alpha	example/repo	skill-alpha	pending	gate_pass	ok	goal	domain	[]	alpha																
+R002	review	example/repo@skill-beta	example/repo	skill-beta	pending	gate_pass	ok	goal	domain	[]	beta																
+EOF_Q
+
   cat > "$tmp/worker1.tsv" <<'EOF_W1'
-skill_ref	repo	skill	manifest_status	gate_status	gate_reason	project_goal	project_domain	project_constraints	discovery_summary	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision	ai_recommended_status	ai_summary	ai_rationale	ai_reviewer	ai_reviewed_at
-example/repo@skill-alpha	example/repo	skill-alpha	pending	gate_pass	ok	goal	domain	[]	alpha	70	60	40	0.50	hold	pending	worker1 summary	rationale	worker-1	2026-02-18T11:00:00Z
-example/repo@skill-beta	example/repo	skill-beta	pending	gate_pass	ok	goal	domain	[]	beta	80	75	30	0.80	approve	approved	worker1 summary	rationale	worker-1	2026-02-18T11:01:00Z
+task_id	expected_stage	skill_ref	repo	skill	manifest_status	gate_status	gate_reason	project_goal	project_domain	project_constraints	discovery_summary	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision	ai_recommended_status	ai_summary	ai_rationale	ai_reviewer	ai_reviewed_at	worker_run_id	worker_id	worker_started_at	worker_finished_at	worker_attempt	orchestrator_name
+R001	review	example/repo@skill-alpha	example/repo	skill-alpha	pending	gate_pass	ok	goal	domain	[]	alpha	70	60	40	0.50	hold	pending	worker1 summary	rationale	worker-1	2026-02-18T11:00:00Z	run-1	worker-a	2026-02-18T11:00:00Z	2026-02-18T11:02:00Z	1	orch-y
+R002	review	example/repo@skill-beta	example/repo	skill-beta	pending	gate_pass	ok	goal	domain	[]	beta	80	75	30	0.80	approve	approved	worker1 summary	rationale	worker-1	2026-02-18T11:01:00Z	run-1	worker-b	2026-02-18T11:00:30Z	2026-02-18T11:03:00Z	1	orch-y
 EOF_W1
 
   cat > "$tmp/worker2.tsv" <<'EOF_W2'
-skill_ref	repo	skill	manifest_status	gate_status	gate_reason	project_goal	project_domain	project_constraints	discovery_summary	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision	ai_recommended_status	ai_summary	ai_rationale	ai_reviewer	ai_reviewed_at
-example/repo@skill-alpha	example/repo	skill-alpha	pending	gate_pass	ok	goal	domain	[]	alpha	95	90	20	0.92	approve	approved	worker2 summary	rationale	worker-2	2026-02-18T11:02:00Z
+task_id	expected_stage	skill_ref	repo	skill	manifest_status	gate_status	gate_reason	project_goal	project_domain	project_constraints	discovery_summary	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision	ai_recommended_status	ai_summary	ai_rationale	ai_reviewer	ai_reviewed_at	worker_run_id	worker_id	worker_started_at	worker_finished_at	worker_attempt	orchestrator_name
+R001	review	example/repo@skill-alpha	example/repo	skill-alpha	pending	gate_pass	ok	goal	domain	[]	alpha	95	90	20	0.92	approve	approved	worker2 summary	rationale	worker-2	2026-02-18T11:02:00Z	run-2	worker-c	2026-02-18T11:01:30Z	2026-02-18T11:04:00Z	1	orch-y
 EOF_W2
 
-  "$SCRIPT_PATH" merge-ai-reviews --out "$tmp/review_ai.merged.tsv" "$tmp/worker1.tsv" "$tmp/worker2.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
+  "$SCRIPT_PATH" verify-parallel-proof \
+    --stage review \
+    --queue "$tmp/review_ai.queue.tsv" \
+    --out "$tmp/review_parallel_proof.tsv" \
+    --summary "$tmp/review_parallel_summary.json" \
+    "$tmp/worker1.tsv" "$tmp/worker2.tsv" > "$tmp/proof.stdout.txt" 2> "$tmp/proof.stderr.txt" || return 1
+
+  "$SCRIPT_PATH" merge-ai-reviews --out "$tmp/review_ai.merged.tsv" --proof "$tmp/review_parallel_summary.json" "$tmp/worker1.tsv" "$tmp/worker2.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
 
   assert_row_count "$tmp/review_ai.merged.tsv" 2 || return 1
-  awk -F '\t' 'NR>1 && $1=="example/repo@skill-alpha" {exit !($16=="approved" && $19=="worker-2")}' "$tmp/review_ai.merged.tsv" || return 1
+  awk -F '\t' 'NR>1 && $3=="example/repo@skill-alpha" {exit !($18=="approved" && $21=="worker-2")}' "$tmp/review_ai.merged.tsv" || return 1
 }
 
 test_apply_ai_reviews_process() {
@@ -409,9 +577,9 @@ example/repo@skill-beta	example/repo	skill-beta	github	beta summary	0.6	pending	
 EOF_MANIFEST
 
   cat > "$tmp/review_ai.merged.tsv" <<'EOF_AI'
-skill_ref	repo	skill	manifest_status	gate_status	gate_reason	project_goal	project_domain	project_constraints	discovery_summary	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision	ai_recommended_status	ai_summary	ai_rationale	ai_reviewer	ai_reviewed_at
-example/repo@skill-alpha	example/repo	skill-alpha	pending	gate_pass	ok	goal	domain	[]	alpha	91	89	18	0.95	approve	approved	high fit	rationale	reviewer-a	2026-02-18T12:00:00Z
-example/repo@skill-beta	example/repo	skill-beta	pending	gate_pass	ok	goal	domain	[]	beta	30	25	85	0.77	reject	rejected	low fit	rationale	reviewer-b	2026-02-18T12:01:00Z
+task_id	expected_stage	skill_ref	repo	skill	manifest_status	gate_status	gate_reason	project_goal	project_domain	project_constraints	discovery_summary	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision	ai_recommended_status	ai_summary	ai_rationale	ai_reviewer	ai_reviewed_at	worker_run_id	worker_id	worker_started_at	worker_finished_at	worker_attempt	orchestrator_name
+R001	review	example/repo@skill-alpha	example/repo	skill-alpha	pending	gate_pass	ok	goal	domain	[]	alpha	91	89	18	0.95	approve	approved	high fit	rationale	reviewer-a	2026-02-18T12:00:00Z	run-a	worker-1	2026-02-18T11:59:00Z	2026-02-18T12:00:00Z	1	orch-y
+R002	review	example/repo@skill-beta	example/repo	skill-beta	pending	gate_pass	ok	goal	domain	[]	beta	30	25	85	0.77	reject	rejected	low fit	rationale	reviewer-b	2026-02-18T12:01:00Z	run-b	worker-2	2026-02-18T12:00:00Z	2026-02-18T12:01:00Z	1	orch-y
 EOF_AI
 
   "$SCRIPT_PATH" apply-ai-reviews --manifest "$tmp/review_manifest.tsv" --ai-reviews "$tmp/review_ai.merged.tsv" --out "$tmp/review_manifest.ai.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
@@ -433,6 +601,10 @@ example/repo@skill-beta	example/repo	skill-beta	find	beta	0.7	pending	note			60	
 example/toolbox@skill-beta	example/toolbox	skill-beta	github	beta2	0.8	approved	note	reviewer	2026-02-18T12:03:00Z	88	80	25	0.90	approve
 EOF_MANIFEST
 
+  cat > "$tmp/parallel_proof.summary.json" <<'EOF_SUMMARY'
+{"passed":true,"reason_codes":[],"stages":{}}
+EOF_SUMMARY
+
   PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" install-approved --manifest "$tmp/review_manifest.ai.tsv" --report "$tmp/install.report.tsv" --dry-run > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
 
   assert_file_exists "$tmp/install.report.tsv" || return 1
@@ -445,6 +617,8 @@ EOF_MANIFEST
   assert_file_exists "$tmp/install.exec.report.tsv" || return 1
   assert_file_exists "$tmp/.agents/skills/skill-alpha/SKILL.md" || return 1
   assert_file_exists "$tmp/.agents/skills/skill-beta/SKILL.md" || return 1
+  assert_file_exists "$tmp/audit.log" || return 1
+  assert_contains "$tmp/audit.log" "parallel proof summary" || return 1
 }
 
 test_audit_process() {
@@ -452,12 +626,17 @@ test_audit_process() {
   tmp="$(mktemp -d)"
   setup_mock_env "$tmp"
 
+  cat > "$tmp/parallel_proof.summary.json" <<'EOF_SUMMARY'
+{"passed":true,"reason_codes":[],"stages":{"discovery":{"passed":true},"review":{"passed":true}}}
+EOF_SUMMARY
+
   PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" audit --out "$tmp/audit.log" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
 
   assert_file_exists "$tmp/audit.log" || return 1
   assert_contains "$tmp/audit.log" "# Audit Log" || return 1
   assert_contains "$tmp/audit.log" "## npx skills list" || return 1
   assert_contains "$tmp/audit.log" "All skills are up to date" || return 1
+  assert_contains "$tmp/audit.log" "parallel proof summary" || return 1
 }
 
 test_deprecated_collect_process() {
@@ -479,11 +658,10 @@ test_deprecated_collect_process() {
 
 test_integration_ai_only_e2e() {
   local tmp project run_dir
-  local queue worker_d worker_r
   tmp="$(mktemp -d)"
   project="$tmp/project"
   run_dir="$tmp/run"
-  mkdir -p "$project/src" "$project/docs"
+  mkdir -p "$project/src" "$project/docs" "$run_dir/review_discovery.workers" "$run_dir/review_ai.workers"
   setup_mock_env "$tmp"
 
   cat > "$project/README.md" <<'EOF_README'
@@ -495,20 +673,20 @@ EOF_README
 print("workflow")
 EOF_APP
 
-  PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" run --project-root "$project" --out-dir "$run_dir" > "$tmp/run.stdout.txt" 2> "$tmp/run.stderr.txt" || return 1
+  PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" run --project-root "$project" --out-dir "$run_dir" --channel find --channel github > "$tmp/run.stdout.txt" 2> "$tmp/run.stderr.txt" || return 1
 
-  queue="$run_dir/review_discovery.queue.tsv"
-  worker_d="$run_dir/review_discovery.worker.tsv"
-  worker_r="$run_dir/review_ai.worker.tsv"
+  assert_file_exists "$run_dir/review_discovery.queue.tsv" || return 1
+  assert_file_exists "$run_dir/run_contract.json" || return 1
 
-  assert_file_exists "$queue" || return 1
-
-  cat > "$worker_d" <<'EOF_DISCOVERY'
-skill_ref	repo	skill	discovery_channels	discovery_evidence	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision	ai_recommended_status	ai_summary	ai_rationale	ai_reviewer	ai_reviewed_at
-example/repo@skill-alpha	example/repo	skill-alpha	find	project-fit discovery evidence	92	87	20	0.93	approve	approved	strong discovery fit	rationale	discovery-worker	2026-02-18T13:00:00Z
+  cat > "$run_dir/review_discovery.workers/discovery.tsv" <<'EOF_DISCOVERY'
+task_id	expected_stage	skill_ref	repo	skill	discovery_channels	discovery_evidence	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision	ai_recommended_status	ai_summary	ai_rationale	ai_reviewer	ai_reviewed_at	worker_run_id	worker_id	worker_started_at	worker_finished_at	worker_attempt	orchestrator_name
+D001	discovery	example/repo@skill-alpha	example/repo	skill-alpha	find	project-fit discovery evidence	92	87	20	0.93	approve	approved	strong discovery fit	rationale	discovery-worker	2026-02-18T13:00:00Z	run-d1	worker-d1	2026-02-18T13:00:00Z	2026-02-18T13:02:00Z	1	orch-z
+D002	discovery	example/repo@skill-alpha	example/repo	skill-alpha	github	corroborating evidence	90	86	22	0.91	approve	approved	strong discovery fit	rationale	discovery-worker	2026-02-18T13:00:15Z	run-d2	worker-d2	2026-02-18T13:00:15Z	2026-02-18T13:02:15Z	1	orch-z
 EOF_DISCOVERY
 
-  "$SCRIPT_PATH" merge-ai-discovery --out "$run_dir/candidates.ai.tsv" --manifest "$run_dir/review_manifest.tsv" "$worker_d" > "$tmp/merge_discovery.stdout.txt" 2> "$tmp/merge_discovery.stderr.txt" || return 1
+  "$SCRIPT_PATH" verify-parallel-proof --stage discovery --queue "$run_dir/review_discovery.queue.tsv" --out "$run_dir/discovery_parallel_proof.tsv" --summary "$run_dir/discovery_parallel_summary.json" "$run_dir/review_discovery.workers/discovery.tsv" > "$tmp/discovery.proof.stdout.txt" 2> "$tmp/discovery.proof.stderr.txt" || return 1
+
+  "$SCRIPT_PATH" merge-ai-discovery --out "$run_dir/candidates.ai.tsv" --manifest "$run_dir/review_manifest.tsv" --proof "$run_dir/discovery_parallel_summary.json" "$run_dir/review_discovery.workers/discovery.tsv" > "$tmp/merge_discovery.stdout.txt" 2> "$tmp/merge_discovery.stderr.txt" || return 1
 
   PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" validate-content --manifest "$run_dir/review_manifest.tsv" --out "$run_dir/review_content.tsv" > "$tmp/validate.stdout.txt" 2> "$tmp/validate.stderr.txt" || return 1
 
@@ -516,10 +694,12 @@ EOF_DISCOVERY
 
   assert_row_count "$run_dir/review_ai.queue.tsv" 1 || return 1
 
-  head -n 1 "$run_dir/review_ai.queue.tsv" > "$worker_r"
-  awk -F '\t' -v OFS='\t' 'NR==2 {$11="95"; $12="90"; $13="15"; $14="0.97"; $15="approve"; $16="approved"; $17="ready to install"; $18="meets project goals"; $19="review-worker"; $20="2026-02-18T13:10:00Z"; print}' "$run_dir/review_ai.queue.tsv" >> "$worker_r"
+  head -n 1 "$run_dir/review_ai.queue.tsv" > "$run_dir/review_ai.workers/review.tsv"
+  awk -F '\t' -v OFS='\t' 'NR==2 {$13="95"; $14="90"; $15="15"; $16="0.97"; $17="approve"; $18="approved"; $19="ready to install"; $20="meets project goals"; $21="review-worker"; $22="2026-02-18T13:10:00Z"; $23="run-r1"; $24="worker-r1"; $25="2026-02-18T13:09:00Z"; $26="2026-02-18T13:10:00Z"; $27="1"; $28="orch-z"; print}' "$run_dir/review_ai.queue.tsv" >> "$run_dir/review_ai.workers/review.tsv"
 
-  "$SCRIPT_PATH" merge-ai-reviews --out "$run_dir/review_ai.merged.tsv" "$worker_r" > "$tmp/merge_ai.stdout.txt" 2> "$tmp/merge_ai.stderr.txt" || return 1
+  "$SCRIPT_PATH" verify-parallel-proof --stage review --queue "$run_dir/review_ai.queue.tsv" --out "$run_dir/review_parallel_proof.tsv" --summary "$run_dir/review_parallel_summary.json" "$run_dir/review_ai.workers/review.tsv" > "$tmp/review.proof.stdout.txt" 2> "$tmp/review.proof.stderr.txt" || return 1
+
+  "$SCRIPT_PATH" merge-ai-reviews --out "$run_dir/review_ai.merged.tsv" --proof "$run_dir/review_parallel_summary.json" "$run_dir/review_ai.workers/review.tsv" > "$tmp/merge_ai.stdout.txt" 2> "$tmp/merge_ai.stderr.txt" || return 1
   "$SCRIPT_PATH" apply-ai-reviews --manifest "$run_dir/review_manifest.tsv" --ai-reviews "$run_dir/review_ai.merged.tsv" --out "$run_dir/review_manifest.ai.tsv" > "$tmp/apply_ai.stdout.txt" 2> "$tmp/apply_ai.stderr.txt" || return 1
 
   awk -F '\t' 'NR>1 && $1=="example/repo@skill-alpha" {exit !($7=="approved" && $9=="review-worker")}' "$run_dir/review_manifest.ai.tsv" || return 1
@@ -527,6 +707,7 @@ EOF_DISCOVERY
   PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" install-approved --manifest "$run_dir/review_manifest.ai.tsv" --report "$run_dir/install.report.tsv" --dry-run > "$tmp/install.stdout.txt" 2> "$tmp/install.stderr.txt" || return 1
   assert_file_exists "$run_dir/install.report.tsv" || return 1
   assert_row_count "$run_dir/install.report.tsv" 1 || return 1
+  assert_file_exists "$run_dir/parallel_proof.summary.json" || return 1
 }
 
 # --------------------------
@@ -536,10 +717,16 @@ EOF_DISCOVERY
 log "## Process Suite"
 run_test "process" "run ai-only" test_run_ai_only_process
 run_test "process" "prepare-ai-discovery" test_prepare_ai_discovery_process
+run_test "process" "verify-parallel-proof success" test_verify_parallel_proof_success_process
+run_test "process" "verify-parallel-proof coverage fail" test_verify_parallel_proof_fail_coverage_process
+run_test "process" "verify-parallel-proof serial fail" test_verify_parallel_proof_fail_serial_process
+run_test "process" "verify-parallel-proof metadata fail" test_verify_parallel_proof_fail_missing_metadata_process
+run_test "process" "merge-ai-discovery requires proof" test_merge_ai_discovery_requires_proof_process
 run_test "process" "merge-ai-discovery" test_merge_ai_discovery_process
 run_test "process" "validate-content gate" test_validate_content_gate_process
 run_test "process" "validate-content stdin-safe" test_validate_content_stdin_safe_process
 run_test "process" "prepare-ai-reviews" test_prepare_ai_reviews_process
+run_test "process" "merge-ai-reviews requires proof" test_merge_ai_reviews_requires_proof_process
 run_test "process" "merge-ai-reviews" test_merge_ai_reviews_process
 run_test "process" "apply-ai-reviews" test_apply_ai_reviews_process
 run_test "process" "install-approved" test_install_approved_process
@@ -548,7 +735,7 @@ run_test "process" "deprecated collect" test_deprecated_collect_process
 
 log ""
 log "## Integration Suite"
-run_test "integration" "ai-only end-to-end" test_integration_ai_only_e2e
+run_test "integration" "ai-only strict end-to-end" test_integration_ai_only_e2e
 
 log ""
 log "summary: pass=$PASS fail=$FAIL"

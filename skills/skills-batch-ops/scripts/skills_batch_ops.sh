@@ -6,10 +6,11 @@ usage() {
 Usage:
   skills_batch_ops.sh run [options]
   skills_batch_ops.sh prepare-ai-discovery --project-root PATH --project-context-files PATH --project-context-chunks PATH --project-intent PATH [--out PATH] [--channel find|top|github|web ...]
-  skills_batch_ops.sh merge-ai-discovery --out PATH --manifest PATH <discovery_worker_1.tsv> [discovery_worker_2.tsv ...]
+  skills_batch_ops.sh verify-parallel-proof --stage discovery|review --queue PATH --out PATH --summary PATH <worker_tsv_1> [worker_tsv_2 ...]
+  skills_batch_ops.sh merge-ai-discovery --out PATH --manifest PATH --proof PATH <discovery_worker_1.tsv> [discovery_worker_2.tsv ...]
   skills_batch_ops.sh validate-content --manifest PATH [--out PATH] [--status pending|approved|rejected|all] [--skill-ref REF ...] [--limit N]
   skills_batch_ops.sh prepare-ai-reviews --manifest PATH --content-report PATH [--project-intent PATH] [--out PATH] [--status pending|approved|rejected|all] [--limit N] [--include-gate-fail]
-  skills_batch_ops.sh merge-ai-reviews --out PATH <ai_review_worker_1.tsv> [ai_review_worker_2.tsv ...]
+  skills_batch_ops.sh merge-ai-reviews --out PATH --proof PATH <ai_review_worker_1.tsv> [ai_review_worker_2.tsv ...]
   skills_batch_ops.sh apply-ai-reviews --manifest PATH --ai-reviews PATH [--out PATH]
   skills_batch_ops.sh install-approved --manifest PATH [--report PATH] [--dry-run] [--no-yes]
   skills_batch_ops.sh install --file PATH [--dry-run] [--no-yes]
@@ -103,7 +104,7 @@ write_project_context_files_header() {
 write_discovery_queue_header() {
   local out="$1"
   ensure_parent_dir "$out"
-  printf 'task_id\tchannel\tproject_root\tproject_intent_file\tproject_context_files\tproject_context_chunks\tdiscovery_objective\toutput_contract\n' > "$out"
+  printf 'task_id\texpected_stage\tchannel\tproject_root\tproject_intent_file\tproject_context_files\tproject_context_chunks\tdiscovery_objective\toutput_contract\n' > "$out"
 }
 
 write_candidates_ai_header() {
@@ -127,13 +128,129 @@ write_content_review_header() {
 write_ai_review_header() {
   local out="$1"
   ensure_parent_dir "$out"
-  printf 'skill_ref\trepo\tskill\tmanifest_status\tgate_status\tgate_reason\tproject_goal\tproject_domain\tproject_constraints\tdiscovery_summary\tai_relevance\tai_quality\tai_risk\tai_confidence\tai_decision\tai_recommended_status\tai_summary\tai_rationale\tai_reviewer\tai_reviewed_at\n' > "$out"
+  printf 'task_id\texpected_stage\tskill_ref\trepo\tskill\tmanifest_status\tgate_status\tgate_reason\tproject_goal\tproject_domain\tproject_constraints\tdiscovery_summary\tai_relevance\tai_quality\tai_risk\tai_confidence\tai_decision\tai_recommended_status\tai_summary\tai_rationale\tai_reviewer\tai_reviewed_at\tworker_run_id\tworker_id\tworker_started_at\tworker_finished_at\tworker_attempt\torchestrator_name\n' > "$out"
+}
+
+write_parallel_proof_header() {
+  local out="$1"
+  ensure_parent_dir "$out"
+  printf 'stage\ttask_id\tqueue_skill_ref\tworker_skill_ref\tworker_id\tworker_run_id\tworker_started_at\tworker_finished_at\tcheck_pass\treason_codes\tnotes\n' > "$out"
 }
 
 write_install_report_header() {
   local out="$1"
   ensure_parent_dir "$out"
   printf 'timestamp\trepo\tskills\tstatus\tcommand\n' > "$out"
+}
+
+require_parallel_proof_passed() {
+  local proof="$1"
+  local expected_stage="$2"
+  local passed="false"
+  local stage=""
+
+  [[ -n "$proof" && -f "$proof" ]] || die "missing parallel proof summary: $proof"
+
+  if command -v jq >/dev/null 2>&1; then
+    passed="$(jq -r '.passed // false' "$proof" 2>/dev/null || printf 'false')"
+    stage="$(jq -r '.stage // ""' "$proof" 2>/dev/null || true)"
+  else
+    passed="$(grep -Eo '"passed"[[:space:]]*:[[:space:]]*(true|false)' "$proof" | head -n 1 | grep -Eo '(true|false)' || printf 'false')"
+    stage="$(grep -Eo '"stage"[[:space:]]*:[[:space:]]*"[^"]+"' "$proof" | head -n 1 | sed -E 's/.*"stage"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' || true)"
+  fi
+
+  [[ "$passed" == "true" ]] || die "parallel proof failed: $proof"
+  if [[ -n "$stage" && "$stage" != "$expected_stage" ]]; then
+    die "parallel proof stage mismatch: expected '$expected_stage', got '$stage' ($proof)"
+  fi
+}
+
+write_run_contract() {
+  local out="$1"
+  local project_root="$2"
+  local run_dir="$3"
+  local discovery_queue="$4"
+  local review_queue="$5"
+  local discovery_proof_tsv="$6"
+  local discovery_summary_json="$7"
+  local review_proof_tsv="$8"
+  local review_summary_json="$9"
+  local aggregate_summary_json="${10}"
+
+  if command -v jq >/dev/null 2>&1; then
+    jq -n \
+      --arg generated_at "$(now_utc)" \
+      --arg project_root "$project_root" \
+      --arg run_dir "$run_dir" \
+      --arg discovery_queue "$discovery_queue" \
+      --arg review_queue "$review_queue" \
+      --arg discovery_proof_tsv "$discovery_proof_tsv" \
+      --arg discovery_summary_json "$discovery_summary_json" \
+      --arg review_proof_tsv "$review_proof_tsv" \
+      --arg review_summary_json "$review_summary_json" \
+      --arg aggregate_summary_json "$aggregate_summary_json" \
+      '{
+        generated_at: $generated_at,
+        project_root: $project_root,
+        run_dir: $run_dir,
+        contracts: {
+          discovery: {
+            queue: $discovery_queue,
+            worker_glob: ($run_dir + "/review_discovery.workers/*.tsv"),
+            proof_tsv: $discovery_proof_tsv,
+            summary_json: $discovery_summary_json
+          },
+          review: {
+            queue: $review_queue,
+            worker_glob: ($run_dir + "/review_ai.workers/*.tsv"),
+            proof_tsv: $review_proof_tsv,
+            summary_json: $review_summary_json
+          },
+          aggregate_summary_json: $aggregate_summary_json
+        },
+        required_worker_columns: [
+          "task_id",
+          "worker_run_id",
+          "worker_id",
+          "worker_started_at",
+          "worker_finished_at",
+          "worker_attempt",
+          "orchestrator_name"
+        ]
+      }' > "$out"
+  else
+    cat > "$out" <<JSON
+{
+  "generated_at": "$(now_utc)",
+  "project_root": "$(sanitize_field "$project_root")",
+  "run_dir": "$(sanitize_field "$run_dir")",
+  "contracts": {
+    "discovery": {
+      "queue": "$(sanitize_field "$discovery_queue")",
+      "worker_glob": "$(sanitize_field "$run_dir")/review_discovery.workers/*.tsv",
+      "proof_tsv": "$(sanitize_field "$discovery_proof_tsv")",
+      "summary_json": "$(sanitize_field "$discovery_summary_json")"
+    },
+    "review": {
+      "queue": "$(sanitize_field "$review_queue")",
+      "worker_glob": "$(sanitize_field "$run_dir")/review_ai.workers/*.tsv",
+      "proof_tsv": "$(sanitize_field "$review_proof_tsv")",
+      "summary_json": "$(sanitize_field "$review_summary_json")"
+    },
+    "aggregate_summary_json": "$(sanitize_field "$aggregate_summary_json")"
+  },
+  "required_worker_columns": [
+    "task_id",
+    "worker_run_id",
+    "worker_id",
+    "worker_started_at",
+    "worker_finished_at",
+    "worker_attempt",
+    "orchestrator_name"
+  ]
+}
+JSON
+  fi
 }
 
 is_binary_extension() {
@@ -419,13 +536,369 @@ cmd_prepare_ai_discovery() {
     esac
 
     idx=$((idx + 1))
-    printf 'D%03d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    printf 'D%03d\tdiscovery\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$idx" "$channel" "$project_root" "$project_intent" "$context_files" "$context_chunks" \
       "$(sanitize_field "$objective")" \
-      "Emit TSV rows: skill_ref,repo,skill,discovery_channels,discovery_evidence,ai_relevance,ai_quality,ai_risk,ai_confidence,ai_decision,ai_recommended_status,ai_summary,ai_rationale,ai_reviewer,ai_reviewed_at" >> "$out"
+      "Emit TSV rows: task_id,expected_stage,skill_ref,repo,skill,discovery_channels,discovery_evidence,ai_relevance,ai_quality,ai_risk,ai_confidence,ai_decision,ai_recommended_status,ai_summary,ai_rationale,ai_reviewer,ai_reviewed_at,worker_run_id,worker_id,worker_started_at,worker_finished_at,worker_attempt,orchestrator_name" >> "$out"
   done
 
   log "Saved AI discovery queue: $out"
+}
+
+cmd_verify_parallel_proof() {
+  require_cmd node
+
+  local stage=""
+  local queue=""
+  local out=""
+  local summary=""
+  local -a inputs=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --stage)
+        stage="$(printf '%s' "${2:-}" | tr '[:upper:]' '[:lower:]')"
+        shift 2
+        ;;
+      --queue)
+        queue="${2:-}"
+        shift 2
+        ;;
+      --out)
+        out="${2:-}"
+        shift 2
+        ;;
+      --summary)
+        summary="${2:-}"
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        inputs+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  [[ "$stage" == "discovery" || "$stage" == "review" ]] || die "verify-parallel-proof --stage must be discovery or review"
+  [[ -n "$queue" && -f "$queue" ]] || die "verify-parallel-proof requires --queue PATH"
+  [[ -n "$out" ]] || die "verify-parallel-proof requires --out PATH"
+  [[ -n "$summary" ]] || die "verify-parallel-proof requires --summary PATH"
+  [[ ${#inputs[@]} -gt 0 ]] || die "verify-parallel-proof requires at least one worker TSV"
+
+  ensure_parent_dir "$out"
+  ensure_parent_dir "$summary"
+
+  if node - "$stage" "$queue" "$out" "$summary" "${inputs[@]}" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+
+const [stage, queuePath, outPath, summaryPath, ...workerFiles] = process.argv.slice(2);
+const now = new Date().toISOString();
+
+const reasonCodes = new Set();
+const queueTasks = new Map();
+const queueTaskReasons = new Map();
+const taskState = new Map();
+const coveredTasks = new Set();
+const unexpectedTaskIds = new Set();
+const uniqueWorkers = new Set();
+const intervals = [];
+
+function parseTsv(filePath) {
+  const raw = fs.readFileSync(filePath, 'utf8').replace(/\r\n/g, '\n');
+  const lines = raw.split('\n').filter((line, idx) => idx === 0 || line !== '');
+  if (lines.length === 0) return { header: [], rows: [] };
+  const header = lines[0].split('\t');
+  const rows = lines.slice(1).map((line) => line.split('\t'));
+  return { header, rows };
+}
+
+function indexOf(header, name) {
+  const idx = header.indexOf(name);
+  return idx >= 0 ? idx : -1;
+}
+
+function safeCell(row, idx) {
+  if (idx < 0) return '';
+  return (row[idx] || '').trim();
+}
+
+function ensureTaskState(taskId, queueSkillRef) {
+  if (!taskState.has(taskId)) {
+    taskState.set(taskId, {
+      queueSkillRef: queueSkillRef || '',
+      workerSkillRefs: new Set(),
+      workerIds: new Set(),
+      workerRunIds: new Set(),
+      minStart: null,
+      maxEnd: null,
+    });
+  }
+  return taskState.get(taskId);
+}
+
+function addTaskReason(taskId, code) {
+  reasonCodes.add(code);
+  if (!queueTaskReasons.has(taskId)) queueTaskReasons.set(taskId, new Set());
+  queueTaskReasons.get(taskId).add(code);
+}
+
+function toMs(iso) {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return null;
+  return ms;
+}
+
+const queueParsed = parseTsv(queuePath);
+const qTaskIdIdx = indexOf(queueParsed.header, 'task_id');
+const qExpectedStageIdx = indexOf(queueParsed.header, 'expected_stage');
+const qSkillRefIdx = indexOf(queueParsed.header, 'skill_ref');
+
+if (qTaskIdIdx < 0 || qExpectedStageIdx < 0) {
+  reasonCodes.add('missing_worker_metadata');
+}
+
+for (const row of queueParsed.rows) {
+  const taskId = safeCell(row, qTaskIdIdx);
+  if (!taskId) continue;
+  const expectedStage = safeCell(row, qExpectedStageIdx);
+  const skillRef = safeCell(row, qSkillRefIdx);
+  queueTasks.set(taskId, { expectedStage, skillRef });
+  ensureTaskState(taskId, skillRef);
+}
+
+for (const workerPath of workerFiles) {
+  const parsed = parseTsv(workerPath);
+  const h = parsed.header;
+  const idx = {
+    taskId: indexOf(h, 'task_id'),
+    skillRef: indexOf(h, 'skill_ref'),
+    workerRunId: indexOf(h, 'worker_run_id'),
+    workerId: indexOf(h, 'worker_id'),
+    startedAt: indexOf(h, 'worker_started_at'),
+    finishedAt: indexOf(h, 'worker_finished_at'),
+    attempt: indexOf(h, 'worker_attempt'),
+    orchestrator: indexOf(h, 'orchestrator_name'),
+  };
+  const requiredHeaderMissing = Object.values(idx).some((v) => v < 0);
+  if (requiredHeaderMissing) {
+    reasonCodes.add('missing_worker_metadata');
+  }
+
+  for (const row of parsed.rows) {
+    const taskId = safeCell(row, idx.taskId);
+    const skillRef = safeCell(row, idx.skillRef);
+    const workerRunId = safeCell(row, idx.workerRunId);
+    const workerId = safeCell(row, idx.workerId);
+    const startedAt = safeCell(row, idx.startedAt);
+    const finishedAt = safeCell(row, idx.finishedAt);
+    const attempt = safeCell(row, idx.attempt);
+    const orchestrator = safeCell(row, idx.orchestrator);
+
+    if (!taskId) {
+      reasonCodes.add('missing_worker_metadata');
+      continue;
+    }
+
+    if (!queueTasks.has(taskId)) {
+      reasonCodes.add('task_not_in_queue');
+      unexpectedTaskIds.add(taskId);
+      continue;
+    }
+
+    coveredTasks.add(taskId);
+
+    const queueSkillRef = queueTasks.get(taskId).skillRef;
+    const state = ensureTaskState(taskId, queueSkillRef);
+    if (skillRef) state.workerSkillRefs.add(skillRef);
+    if (workerId) state.workerIds.add(workerId);
+    if (workerRunId) state.workerRunIds.add(workerRunId);
+
+    const metadataMissing = [workerRunId, workerId, startedAt, finishedAt, attempt, orchestrator].some((v) => !v);
+    if (metadataMissing || requiredHeaderMissing) {
+      addTaskReason(taskId, 'missing_worker_metadata');
+    }
+
+    if (stage === 'review' && queueSkillRef && skillRef && queueSkillRef !== skillRef) {
+      addTaskReason(taskId, 'task_ref_mismatch');
+    }
+
+    const startMs = toMs(startedAt);
+    const endMs = toMs(finishedAt);
+    if (startMs === null || endMs === null || endMs < startMs) {
+      addTaskReason(taskId, 'invalid_time_range');
+      continue;
+    }
+
+    if (state.minStart === null || startMs < state.minStart) state.minStart = startMs;
+    if (state.maxEnd === null || endMs > state.maxEnd) state.maxEnd = endMs;
+
+    intervals.push({ taskId, startMs, endMs, workerId });
+    if (workerId) uniqueWorkers.add(workerId);
+  }
+}
+
+for (const taskId of queueTasks.keys()) {
+  if (!coveredTasks.has(taskId)) {
+    addTaskReason(taskId, 'missing_task_coverage');
+  }
+}
+
+const overlapPairs = new Set();
+for (let i = 0; i < intervals.length; i += 1) {
+  for (let j = i + 1; j < intervals.length; j += 1) {
+    const a = intervals[i];
+    const b = intervals[j];
+    if (a.taskId === b.taskId) continue;
+    if (a.startMs <= b.endMs && b.startMs <= a.endMs) {
+      const key = [a.taskId, b.taskId].sort().join('~~');
+      overlapPairs.add(key);
+    }
+  }
+}
+
+if (queueTasks.size >= 2) {
+  if (uniqueWorkers.size < 2) {
+    reasonCodes.add('insufficient_unique_workers');
+  }
+  if (overlapPairs.size === 0) {
+    reasonCodes.add('serial_execution_detected');
+  }
+}
+
+const reasonCodeList = Array.from(reasonCodes).sort();
+const taskRows = [];
+
+for (const [taskId, queueMeta] of Array.from(queueTasks.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
+  const state = taskState.get(taskId);
+  const reasons = Array.from(queueTaskReasons.get(taskId) || []).sort();
+  const checkPass = reasons.length === 0;
+  const workerSkillRef = state ? Array.from(state.workerSkillRefs).filter(Boolean).sort().join(',') : '';
+  const workerId = state ? Array.from(state.workerIds).filter(Boolean).sort().join(',') : '';
+  const workerRunId = state ? Array.from(state.workerRunIds).filter(Boolean).sort().join(',') : '';
+  const workerStartedAt = state && state.minStart !== null ? new Date(state.minStart).toISOString() : '';
+  const workerFinishedAt = state && state.maxEnd !== null ? new Date(state.maxEnd).toISOString() : '';
+  taskRows.push([
+    stage,
+    taskId,
+    queueMeta.skillRef || '',
+    workerSkillRef,
+    workerId,
+    workerRunId,
+    workerStartedAt,
+    workerFinishedAt,
+    checkPass ? 'true' : 'false',
+    reasons.join(','),
+    checkPass ? 'task proof ok' : 'task proof failed',
+  ]);
+}
+
+for (const taskId of Array.from(unexpectedTaskIds).sort()) {
+  taskRows.push([
+    stage,
+    taskId,
+    '',
+    '',
+    '',
+    '',
+    '',
+    '',
+    'false',
+    'task_not_in_queue',
+    'worker task_id not present in queue',
+  ]);
+}
+
+const perTaskReasons = new Set();
+for (const rows of queueTaskReasons.values()) {
+  for (const code of rows.values()) perTaskReasons.add(code);
+}
+const globalOnlyReasons = reasonCodeList.filter((code) => !perTaskReasons.has(code));
+if (globalOnlyReasons.length > 0) {
+  taskRows.push([
+    stage,
+    '__global__',
+    '',
+    '',
+    '',
+    '',
+    '',
+    '',
+    'false',
+    globalOnlyReasons.join(','),
+    'global strict checks failed',
+  ]);
+}
+
+const header = [
+  'stage',
+  'task_id',
+  'queue_skill_ref',
+  'worker_skill_ref',
+  'worker_id',
+  'worker_run_id',
+  'worker_started_at',
+  'worker_finished_at',
+  'check_pass',
+  'reason_codes',
+  'notes',
+];
+const proofTsv = [header.join('\t'), ...taskRows.map((row) => row.join('\t'))].join('\n') + '\n';
+fs.writeFileSync(outPath, proofTsv, 'utf8');
+
+const taskCount = queueTasks.size;
+const coveredTaskCount = coveredTasks.size;
+const coverageRatio = taskCount === 0 ? 1 : coveredTaskCount / taskCount;
+const summary = {
+  stage,
+  generated_at: now,
+  queue: queuePath,
+  worker_files: workerFiles,
+  passed: reasonCodeList.length === 0,
+  reason_codes: reasonCodeList,
+  task_count: taskCount,
+  covered_task_count: coveredTaskCount,
+  coverage_ratio: Number(coverageRatio.toFixed(4)),
+  unique_workers: uniqueWorkers.size,
+  overlap_pairs: overlapPairs.size,
+};
+fs.writeFileSync(summaryPath, JSON.stringify(summary, null, 2) + '\n', 'utf8');
+
+const aggregatePath = path.join(path.dirname(summaryPath), 'parallel_proof.summary.json');
+let aggregate = {};
+if (fs.existsSync(aggregatePath)) {
+  try {
+    aggregate = JSON.parse(fs.readFileSync(aggregatePath, 'utf8'));
+  } catch {
+    aggregate = {};
+  }
+}
+if (!aggregate || typeof aggregate !== 'object') aggregate = {};
+if (!aggregate.stages || typeof aggregate.stages !== 'object') aggregate.stages = {};
+aggregate.generated_at = now;
+aggregate.stages[stage] = summary;
+const stageSummaries = Object.values(aggregate.stages).filter((v) => v && typeof v === 'object');
+aggregate.passed = stageSummaries.length > 0 && stageSummaries.every((v) => v.passed === true);
+aggregate.reason_codes = Array.from(
+  new Set(stageSummaries.flatMap((v) => Array.isArray(v.reason_codes) ? v.reason_codes : [])),
+).sort();
+fs.writeFileSync(aggregatePath, JSON.stringify(aggregate, null, 2) + '\n', 'utf8');
+
+process.exit(summary.passed ? 0 : 7);
+NODE
+  then
+    log "Saved parallel proof report: $out"
+    log "Saved parallel proof summary: $summary"
+  else
+    log "Saved parallel proof report: $out"
+    log "Saved parallel proof summary: $summary"
+    die "parallel proof failed for stage: $stage"
+  fi
 }
 
 cmd_merge_ai_discovery() {
@@ -434,6 +907,7 @@ cmd_merge_ai_discovery() {
 
   local out=""
   local manifest=""
+  local proof=""
   local file
   local -a inputs=()
   local tmp_dir raw
@@ -446,6 +920,10 @@ cmd_merge_ai_discovery() {
         ;;
       --manifest)
         manifest="${2:-}"
+        shift 2
+        ;;
+      --proof)
+        proof="${2:-}"
         shift 2
         ;;
       -h|--help)
@@ -461,6 +939,8 @@ cmd_merge_ai_discovery() {
 
   [[ -n "$out" ]] || die "merge-ai-discovery requires --out PATH"
   [[ -n "$manifest" ]] || die "merge-ai-discovery requires --manifest PATH"
+  [[ -n "$proof" ]] || die "merge-ai-discovery requires --proof PATH"
+  require_parallel_proof_passed "$proof" "discovery"
   [[ ${#inputs[@]} -gt 0 ]] || die "merge-ai-discovery requires at least one worker TSV"
 
   write_candidates_ai_header "$out"
@@ -514,16 +994,16 @@ cmd_merge_ai_discovery() {
     return 1
   }
   {
-    ref=$1
+    ref=$3
     if (ref == "") next
 
-    channels[ref] = add_unique_csv(channels[ref], $4)
-    evidence[ref] = add_unique_pipe(evidence[ref], $5)
+    channels[ref] = add_unique_csv(channels[ref], $6)
+    evidence[ref] = add_unique_pipe(evidence[ref], $7)
 
-    rr = rec_rank($11)
-    dr = decision_rank($10)
-    conf = ($9 == "" ? 0 : $9 + 0)
-    rel = ($6 == "" ? 0 : $6 + 0)
+    rr = rec_rank($13)
+    dr = decision_rank($12)
+    conf = ($11 == "" ? 0 : $11 + 0)
+    rel = ($8 == "" ? 0 : $8 + 0)
 
     if (!(ref in best_line) ||
         rr > best_rec[ref] ||
@@ -540,9 +1020,9 @@ cmd_merge_ai_discovery() {
   END {
     for (ref in best_line) {
       split(best_line[ref], f, FS)
-      f[4] = channels[ref]
-      f[5] = evidence[ref]
-      print f[1]"\t"f[2]"\t"f[3]"\t"f[4]"\t"f[5]"\t"f[6]"\t"f[7]"\t"f[8]"\t"f[9]"\t"f[10]"\t"f[11]"\t"f[12]"\t"f[13]"\t"f[14]"\t"f[15]
+      f[6] = channels[ref]
+      f[7] = evidence[ref]
+      print f[3]"\t"f[4]"\t"f[5]"\t"f[6]"\t"f[7]"\t"f[8]"\t"f[9]"\t"f[10]"\t"f[11]"\t"f[12]"\t"f[13]"\t"f[14]"\t"f[15]"\t"f[16]"\t"f[17]
     }
   }
   ' "$raw" | sort -t $'\t' -k9,9nr -k1,1 >> "$out"
@@ -837,6 +1317,7 @@ cmd_prepare_ai_reviews() {
     -v project_goal="$(sanitize_field "$project_goal")" \
     -v project_domain="$(sanitize_field "$project_domain")" \
     -v project_constraints="$(sanitize_field "$project_constraints")" '
+  BEGIN { task_counter = 0 }
   FNR==NR {
     if (FNR == 1) next
     m_status[$1] = tolower($7)
@@ -852,7 +1333,9 @@ cmd_prepare_ai_reviews() {
     if (status_filter != "all" && m_status[ref] != status_filter) next
     if (include_gate_fail != "1" && gate_status != "gate_pass") next
 
-    print ref, $2, $3, m_status[ref], gate_status, tolower($9), project_goal, project_domain, project_constraints, m_summary[ref], "", "", "", "", "", "", "", "", "", ""
+    task_counter += 1
+    task_id = sprintf("R%03d", task_counter)
+    print task_id, "review", ref, $2, $3, m_status[ref], gate_status, tolower($9), project_goal, project_domain, project_constraints, m_summary[ref], "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""
   }
   ' "$manifest" "$content_report" > "$raw"
 
@@ -878,6 +1361,7 @@ cmd_merge_ai_reviews() {
   require_cmd sort
 
   local out=""
+  local proof=""
   local file
   local -a inputs=()
   local tmp_dir raw
@@ -886,6 +1370,10 @@ cmd_merge_ai_reviews() {
     case "$1" in
       --out)
         out="${2:-}"
+        shift 2
+        ;;
+      --proof)
+        proof="${2:-}"
         shift 2
         ;;
       -h|--help)
@@ -900,6 +1388,8 @@ cmd_merge_ai_reviews() {
   done
 
   [[ -n "$out" ]] || die "merge-ai-reviews requires --out PATH"
+  [[ -n "$proof" ]] || die "merge-ai-reviews requires --proof PATH"
+  require_parallel_proof_passed "$proof" "review"
   [[ ${#inputs[@]} -gt 0 ]] || die "merge-ai-reviews requires at least one input report file"
 
   write_ai_review_header "$out"
@@ -936,13 +1426,13 @@ cmd_merge_ai_reviews() {
     return 1
   }
   {
-    ref=$1
+    ref=$3
     if (ref == "") next
 
-    rr=rec_rank($16)
-    dr=decision_rank($15)
-    conf=($14=="" ? 0 : $14 + 0)
-    rel=($11=="" ? 0 : $11 + 0)
+    rr=rec_rank($18)
+    dr=decision_rank($17)
+    conf=($16=="" ? 0 : $16 + 0)
+    rel=($13=="" ? 0 : $13 + 0)
 
     if (!(ref in best_line) ||
         rr > best_rec[ref] ||
@@ -959,7 +1449,7 @@ cmd_merge_ai_reviews() {
   END {
     for (ref in best_line) print best_line[ref]
   }
-  ' "$raw" | sort -t $'\t' -k14,14nr -k1,1 >> "$out"
+  ' "$raw" | sort -t $'\t' -k16,16nr -k3,3 >> "$out"
 
   log "Saved merged AI review report: $out"
   rm -rf "$tmp_dir"
@@ -1006,19 +1496,19 @@ cmd_apply_ai_reviews() {
   awk -F '\t' -v OFS='\t' '
   FNR==NR {
     if (FNR == 1) next
-    ref=$1
-    rec=tolower($16)
+    ref=$3
+    rec=tolower($18)
     if (rec!="approved" && rec!="pending" && rec!="rejected") next
 
     map_status[ref]=rec
-    map_rel[ref]=$11
-    map_qual[ref]=$12
-    map_risk[ref]=$13
-    map_conf[ref]=$14
-    map_decision[ref]=tolower($15)
-    map_summary[ref]=$17
-    map_reviewer[ref]=$19
-    map_reviewed_at[ref]=$20
+    map_rel[ref]=$13
+    map_qual[ref]=$14
+    map_risk[ref]=$15
+    map_conf[ref]=$16
+    map_decision[ref]=tolower($17)
+    map_summary[ref]=$19
+    map_reviewer[ref]=$21
+    map_reviewed_at[ref]=$22
     next
   }
   FNR==1 { print; next }
@@ -1126,6 +1616,7 @@ cmd_install() {
 
 cmd_audit() {
   local out=""
+  local summary_file=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -1148,6 +1639,7 @@ cmd_audit() {
   fi
 
   ensure_parent_dir "$out"
+  summary_file="$(dirname "$out")/parallel_proof.summary.json"
 
   {
     printf '# Audit Log\n\n'
@@ -1166,6 +1658,13 @@ cmd_audit() {
       FORCE_COLOR=0 npx skills check 2>&1 || true
     else
       printf 'npx is not installed\n'
+    fi
+
+    printf '\n## parallel proof summary\n\n'
+    if [[ -f "$summary_file" ]]; then
+      cat "$summary_file"
+    else
+      printf 'parallel proof summary file not found: %s\n' "$summary_file"
     fi
   } > "$out"
 
@@ -1303,7 +1802,11 @@ cmd_run() {
   local project_root out_dir
   local max_file_bytes chunk_chars
   local files_out chunks_out intent_out
-  local discovery_queue_out candidates_out manifest_out
+  local discovery_queue_out review_queue_out candidates_out manifest_out
+  local discovery_proof_out discovery_summary_out
+  local review_proof_out review_summary_out aggregate_summary_out
+  local run_contract_out
+  local discovery_merge_proof=""
   local channel
   local -a channels=()
   local -a discovery_worker_files=()
@@ -1340,6 +1843,10 @@ cmd_run() {
         discovery_worker_files+=("${2:-}")
         shift 2
         ;;
+      --discovery-proof)
+        discovery_merge_proof="${2:-}"
+        shift 2
+        ;;
       --top|--find-query|--github-query|--web-links-file)
         die "legacy option is removed in AI-only mode: $1"
         ;;
@@ -1366,8 +1873,15 @@ cmd_run() {
   chunks_out="$out_dir/project_context.chunks.ndjson"
   intent_out="$out_dir/project_intent.ai.json"
   discovery_queue_out="$out_dir/review_discovery.queue.tsv"
+  review_queue_out="$out_dir/review_ai.queue.tsv"
   candidates_out="$out_dir/candidates.ai.tsv"
   manifest_out="$out_dir/review_manifest.tsv"
+  discovery_proof_out="$out_dir/discovery_parallel_proof.tsv"
+  discovery_summary_out="$out_dir/discovery_parallel_summary.json"
+  review_proof_out="$out_dir/review_parallel_proof.tsv"
+  review_summary_out="$out_dir/review_parallel_summary.json"
+  aggregate_summary_out="$out_dir/parallel_proof.summary.json"
+  run_contract_out="$out_dir/run_contract.json"
 
   build_project_context "$project_root" "$files_out" "$chunks_out" "$intent_out" "$max_file_bytes" "$chunk_chars"
 
@@ -1393,12 +1907,26 @@ cmd_run() {
   fi
 
   if [[ ${#discovery_worker_files[@]} -gt 0 ]]; then
-    cmd_merge_ai_discovery --out "$candidates_out" --manifest "$manifest_out" "${discovery_worker_files[@]}"
+    [[ -n "$discovery_merge_proof" ]] || die "run with --discovery-worker-file requires --discovery-proof PATH"
+    cmd_merge_ai_discovery --out "$candidates_out" --manifest "$manifest_out" --proof "$discovery_merge_proof" "${discovery_worker_files[@]}"
   else
     write_candidates_ai_header "$candidates_out"
     write_manifest_header "$manifest_out"
   fi
 
+  write_run_contract \
+    "$run_contract_out" \
+    "$project_root" \
+    "$out_dir" \
+    "$discovery_queue_out" \
+    "$review_queue_out" \
+    "$discovery_proof_out" \
+    "$discovery_summary_out" \
+    "$review_proof_out" \
+    "$review_summary_out" \
+    "$aggregate_summary_out"
+
+  log "Saved run contract: $run_contract_out"
   log "Run complete: $out_dir"
 }
 
@@ -1419,6 +1947,7 @@ main() {
   case "$sub" in
     run) cmd_run "$@" ;;
     prepare-ai-discovery) cmd_prepare_ai_discovery "$@" ;;
+    verify-parallel-proof) cmd_verify_parallel_proof "$@" ;;
     merge-ai-discovery) cmd_merge_ai_discovery "$@" ;;
     validate-content) cmd_validate_content "$@" ;;
     prepare-ai-reviews) cmd_prepare_ai_reviews "$@" ;;
