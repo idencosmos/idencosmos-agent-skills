@@ -22,11 +22,13 @@ description: 운영형 배치 워크플로우로 프로젝트 요구사항 분�
 4. 인터넷 검토 채널 수집 (`collect-github`, `import-web`)
 5. 채널 병합/점수화 (`merge`)
 6. 스킬명 + 본문 검증 (`validate-content`)
-7. 멀티 에이전트 분산 검토 (각 `skill_ref`를 개별 에이전트가 처리)
-8. 분산 결과 병합 (`merge-content-reviews`)
-9. 리뷰 매니페스트 승인 (`review_manifest.tsv`에서 `status=approved` 지정)
-10. 승인된 항목만 설치 (`install-approved`)
-11. 설치 후 감사 로그 확인 (`audit.log`)
+7. AI 검토 큐 생성 (`prepare-ai-reviews`)
+8. 멀티 에이전트 의미 기반 검토 (각 `skill_ref`를 개별 에이전트가 처리)
+9. AI 분산 결과 병합 (`merge-ai-reviews`)
+10. AI 결과를 매니페스트에 반영 (`apply-ai-reviews`)
+11. 리뷰 매니페스트 승인 (`review_manifest.tsv` 또는 `review_manifest.ai.tsv`에서 `status=approved` 지정)
+12. 승인된 항목만 설치 (`install-approved`)
+13. 설치 후 감사 로그 확인 (`audit.log`)
 
 ## Fast Path
 
@@ -51,6 +53,15 @@ bash .agents/skills/skills-batch-ops/scripts/skills_batch_ops.sh install-approve
 bash .agents/skills/skills-batch-ops/scripts/skills_batch_ops.sh validate-content \
   --manifest .agents/skills-batch-ops/runs/<timestamp>/review_manifest.tsv \
   --query-file .agents/skills-batch-ops/runs/<timestamp>/query_seeds.txt
+```
+
+AI 검토 큐 생성:
+
+```bash
+bash .agents/skills/skills-batch-ops/scripts/skills_batch_ops.sh prepare-ai-reviews \
+  --manifest .agents/skills-batch-ops/runs/<timestamp>/review_manifest.tsv \
+  --content-report .agents/skills-batch-ops/runs/<timestamp>/review_content.tsv \
+  --status pending
 ```
 
 ## Command Reference
@@ -179,6 +190,70 @@ GitHub 저장소 검색 후, `npx skills add <repo> --list`로 실제 스킬 후
 
 동일 `skill_ref`가 여러 파일에 있으면 `review_status` 우선순위(`verified > manual > failed`)로 대표 항목을 선택합니다.
 
+### `prepare-ai-reviews`
+
+`review_manifest.tsv` + `review_content.tsv`를 기준으로 AI 멀티 에이전트 검토 대상을 추려 큐를 생성합니다.
+
+옵션:
+
+- `--manifest PATH` (필수)
+- `--content-report PATH` (필수, 보통 `validate-content` 결과)
+- `--out PATH` (기본: `<content_report_dir>/review_ai.queue.tsv`)
+- `--status pending|approved|rejected|all` (기본: `pending`)
+- `--limit N`
+- `--include-failed` (`validate-content`에서 `failed`인 후보도 큐에 포함)
+
+출력 컬럼:
+- `skill_ref`
+- `repo`
+- `skill`
+- `manifest_status`
+- `auto_score`
+- `content_overlap`
+- `heuristic_status`
+- `skill_title`
+- `skill_description`
+- `content_preview`
+- `ai_relevance`
+- `ai_quality`
+- `ai_risk`
+- `ai_confidence`
+- `ai_decision` (`approve|hold|reject`)
+- `ai_recommended_status` (`approved|pending|rejected`)
+- `ai_summary`
+- `ai_rationale`
+- `ai_reviewer`
+- `ai_reviewed_at`
+
+### `merge-ai-reviews`
+
+여러 워커 에이전트가 작성한 AI 검토 TSV를 병합해 단일 AI 검토 결과를 만듭니다.
+
+옵션:
+
+- `--out PATH` (필수)
+- 입력 파일들: `<ai_review_worker_1.tsv> <ai_review_worker_2.tsv> ...`
+
+동일 `skill_ref` 중복 시 우선순위:
+1. `ai_recommended_status` (`approved > pending > rejected > empty`)
+2. `ai_decision` (`approve > hold > reject > empty`)
+3. `ai_confidence` (높을수록 우선)
+
+### `apply-ai-reviews`
+
+`merge-ai-reviews` 결과를 `review_manifest.tsv`에 반영해 최종 승인용 매니페스트를 생성합니다.
+
+옵션:
+
+- `--manifest PATH` (필수)
+- `--ai-reviews PATH` (필수)
+- `--out PATH` (기본: `<manifest_dir>/review_manifest.ai.tsv`)
+
+동작:
+- `ai_recommended_status`를 `status`에 반영
+- `review_notes`에 AI 요약 메모 추가
+- `approved_by`, `approved_at`을 `ai_reviewer`, `ai_reviewed_at`으로 채움
+
 ### `install-approved`
 
 `review_manifest.tsv`에서 `status=approved`인 항목만 설치.
@@ -232,6 +307,10 @@ GitHub 저장소 검색 후, `npx skills add <repo> --list`로 실제 스킬 후
 - `review_content.tsv` (본문 검증 결과)
 - `review_content.workers/*.tsv` (멀티 에이전트 개별 결과, 선택)
 - `review_content.merged.tsv` (멀티 에이전트 병합 결과, 선택)
+- `review_ai.queue.tsv` (AI 검토 큐)
+- `review_ai.workers/*.tsv` (AI 워커 개별 결과)
+- `review_ai.merged.tsv` (AI 결과 병합본)
+- `review_manifest.ai.tsv` (AI 반영 매니페스트)
 - `install.report.tsv` (설치 실행 시)
 - `audit.log` (설치 실행 시)
 
@@ -253,32 +332,51 @@ GitHub 저장소 검색 후, `npx skills add <repo> --list`로 실제 스킬 후
 - 기본 설치는 프로젝트 로컬(`.agents/skills`)을 유지
 - `review_manifest.tsv` 승인 전 자동 설치 금지
 - 승인 전 `validate-content` 또는 동등한 본문 검증 필수
+- 운영 승인 전 `prepare-ai-reviews` + 멀티 에이전트 AI 검토 결과 확인 권장
 - 승인 대상은 가능한 한 최소 집합 유지
 - 설치 후 `audit.log` 확인
 - 검증/재실행 시 기존 run 디렉터리 재사용 금지 (`--out-dir`로 항상 새 경로 지정 권장)
 
 ## Multi-Agent Review Pattern
 
-1. 후보 런 생성 후, 부모 에이전트가 우선 검토 대상 `skill_ref` 목록을 확정합니다.
-2. 각 `skill_ref`마다 개별 워커 에이전트를 생성해 아래 명령을 **1 skill_ref = 1 실행**으로 수행합니다.
+1. `validate-content` 완료 후 AI 큐를 생성합니다.
 
 ```bash
-bash .agents/skills/skills-batch-ops/scripts/skills_batch_ops.sh validate-content \
+bash .agents/skills/skills-batch-ops/scripts/skills_batch_ops.sh prepare-ai-reviews \
   --manifest .agents/skills-batch-ops/runs/<timestamp>/review_manifest.tsv \
-  --query-file .agents/skills-batch-ops/runs/<timestamp>/query_seeds.txt \
-  --skill-ref "<owner/repo@skill>" \
-  --out .agents/skills-batch-ops/runs/<timestamp>/review_content.workers/<slug>.tsv
+  --content-report .agents/skills-batch-ops/runs/<timestamp>/review_content.tsv \
+  --status pending \
+  --out .agents/skills-batch-ops/runs/<timestamp>/review_ai.queue.tsv
 ```
 
-3. 부모 에이전트가 워커 결과를 병합합니다.
+2. 부모 에이전트가 `review_ai.queue.tsv`를 읽고, 각 `skill_ref`마다 개별 워커 에이전트를 병렬 생성합니다.
+3. 워커 에이전트는 의미 기반으로 아래 항목을 채워 1행 TSV를 저장합니다.
+- `ai_relevance` (프로젝트 맥락 적합도)
+- `ai_quality` (스킬 설명/실행 가이드 품질)
+- `ai_risk` (오남용/과장/보안/유지보수 위험)
+- `ai_confidence`
+- `ai_decision` / `ai_recommended_status`
+- `ai_summary` / `ai_rationale`
+- `ai_reviewer` / `ai_reviewed_at`
+
+4. 부모 에이전트가 워커 결과를 병합합니다.
 
 ```bash
-bash .agents/skills/skills-batch-ops/scripts/skills_batch_ops.sh merge-content-reviews \
-  --out .agents/skills-batch-ops/runs/<timestamp>/review_content.merged.tsv \
-  .agents/skills-batch-ops/runs/<timestamp>/review_content.workers/*.tsv
+bash .agents/skills/skills-batch-ops/scripts/skills_batch_ops.sh merge-ai-reviews \
+  --out .agents/skills-batch-ops/runs/<timestamp>/review_ai.merged.tsv \
+  .agents/skills-batch-ops/runs/<timestamp>/review_ai.workers/*.tsv
 ```
 
-4. `review_content.merged.tsv`에서 `review_status=verified`를 우선 승인 후보로 반영합니다.
+5. 병합 결과를 최종 매니페스트에 반영합니다.
+
+```bash
+bash .agents/skills/skills-batch-ops/scripts/skills_batch_ops.sh apply-ai-reviews \
+  --manifest .agents/skills-batch-ops/runs/<timestamp>/review_manifest.tsv \
+  --ai-reviews .agents/skills-batch-ops/runs/<timestamp>/review_ai.merged.tsv \
+  --out .agents/skills-batch-ops/runs/<timestamp>/review_manifest.ai.tsv
+```
+
+6. `review_manifest.ai.tsv` 기준으로 설치 승인 여부를 결정합니다.
 
 ## Fallback
 

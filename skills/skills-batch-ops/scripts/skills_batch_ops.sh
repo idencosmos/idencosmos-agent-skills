@@ -15,6 +15,9 @@ Usage:
   skills_batch_ops.sh merge --out PATH --manifest PATH [--find PATH] [--top PATH] [--github PATH] [--web PATH] [--query-file PATH]
   skills_batch_ops.sh validate-content --manifest PATH [--out PATH] [--query-file PATH] [--status pending|approved|rejected|all] [--skill-ref REF ...] [--limit N]
   skills_batch_ops.sh merge-content-reviews --out PATH <content_review_1.tsv> [content_review_2.tsv ...]
+  skills_batch_ops.sh prepare-ai-reviews --manifest PATH --content-report PATH [--out PATH] [--status pending|approved|rejected|all] [--limit N] [--include-failed]
+  skills_batch_ops.sh merge-ai-reviews --out PATH <ai_review_worker_1.tsv> [ai_review_worker_2.tsv ...]
+  skills_batch_ops.sh apply-ai-reviews --manifest PATH --ai-reviews PATH [--out PATH]
   skills_batch_ops.sh install-approved --manifest PATH [--report PATH] [--dry-run] [--no-yes]
   skills_batch_ops.sh install --file PATH [--dry-run] [--no-yes]
   skills_batch_ops.sh audit [--out PATH]
@@ -171,6 +174,12 @@ write_content_review_header() {
   local out="$1"
   ensure_parent_dir "$out"
   printf 'skill_ref\trepo\tskill\tmanifest_status\tauto_score\tname_check\tinstall_check\tskill_md_check\tcontent_overlap\treview_status\tskill_title\tskill_description\tcontent_preview\treview_notes\n' > "$out"
+}
+
+write_ai_review_header() {
+  local out="$1"
+  ensure_parent_dir "$out"
+  printf 'skill_ref\trepo\tskill\tmanifest_status\tauto_score\tcontent_overlap\theuristic_status\tskill_title\tskill_description\tcontent_preview\tai_relevance\tai_quality\tai_risk\tai_confidence\tai_decision\tai_recommended_status\tai_summary\tai_rationale\tai_reviewer\tai_reviewed_at\n' > "$out"
 }
 
 cmd_collect_find() {
@@ -1430,11 +1439,13 @@ cmd_validate_content() {
   local limit=""
   local manifest_dir=""
   local tmp_dir=""
+  local list_cache_dir=""
   local processed=0
   local total_tokens=0
   local manifest_status_lc=""
   local skill_ref repo skill auto_score
   local list_out install_out skill_md_file sandbox_dir listed_skill
+  local repo_cache_key list_cache_file list_cache_status_file cached_list_status
   local name_check install_check skill_md_check content_overlap review_status
   local title description body_preview content_text token notes
   local matched=0
@@ -1508,6 +1519,8 @@ cmd_validate_content() {
 
   write_content_review_header "$out"
   tmp_dir="$(mktemp -d)"
+  list_cache_dir="$tmp_dir/list_cache"
+  mkdir -p "$list_cache_dir"
 
   is_selected_ref() {
     local target_ref="$1"
@@ -1539,26 +1552,38 @@ cmd_validate_content() {
     fi
     processed=$((processed + 1))
 
-    list_out="$tmp_dir/list_${processed}.txt"
-    if FORCE_COLOR=0 npx skills add "$repo" --list > "$list_out" 2>&1; then
-      name_check="not_found"
-      while IFS= read -r listed_skill; do
-        if [[ "$listed_skill" == "$skill" ]]; then
-          name_check="matched"
-          break
-        fi
-      done < <(extract_skill_names_from_list_file "$list_out")
-    else
-      name_check="list_failed"
-    fi
-
     sandbox_dir="$tmp_dir/work_${processed}"
     mkdir -p "$sandbox_dir"
     install_out="$tmp_dir/install_${processed}.txt"
     if (cd "$sandbox_dir" && FORCE_COLOR=0 npx skills add "$repo" --skill "$skill" -y > "$install_out" 2>&1); then
       install_check="installed"
+      name_check="matched"
     else
       install_check="install_failed"
+      repo_cache_key="$(printf '%s' "$repo" | tr '/:@.' '____' | tr -cs '[:alnum:]_' '_')"
+      list_cache_file="$list_cache_dir/${repo_cache_key}.list.txt"
+      list_cache_status_file="$list_cache_dir/${repo_cache_key}.status"
+
+      if [[ ! -f "$list_cache_status_file" ]]; then
+        if FORCE_COLOR=0 npx skills add "$repo" --list > "$list_cache_file" 2>&1; then
+          printf 'ok\n' > "$list_cache_status_file"
+        else
+          printf 'failed\n' > "$list_cache_status_file"
+        fi
+      fi
+
+      cached_list_status="$(head -n 1 "$list_cache_status_file" 2>/dev/null || true)"
+      if [[ "$cached_list_status" == "ok" ]]; then
+        name_check="not_found"
+        while IFS= read -r listed_skill; do
+          if [[ "$listed_skill" == "$skill" ]]; then
+            name_check="matched"
+            break
+          fi
+        done < <(extract_skill_names_from_list_file "$list_cache_file")
+      else
+        name_check="list_failed"
+      fi
     fi
 
     skill_md_file="$sandbox_dir/.agents/skills/$skill/SKILL.md"
@@ -1755,6 +1780,300 @@ cmd_merge_content_reviews() {
   rm -rf "$tmp_dir"
 }
 
+cmd_prepare_ai_reviews() {
+  require_cmd awk
+  require_cmd sort
+
+  local manifest=""
+  local content_report=""
+  local out=""
+  local status_filter="pending"
+  local limit=""
+  local include_failed="0"
+  local tmp_dir raw
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --manifest)
+        manifest="${2:-}"
+        shift 2
+        ;;
+      --content-report)
+        content_report="${2:-}"
+        shift 2
+        ;;
+      --out)
+        out="${2:-}"
+        shift 2
+        ;;
+      --status)
+        status_filter="$(printf '%s' "${2:-}" | tr '[:upper:]' '[:lower:]')"
+        shift 2
+        ;;
+      --limit)
+        limit="${2:-}"
+        shift 2
+        ;;
+      --include-failed)
+        include_failed="1"
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "unknown option for prepare-ai-reviews: $1"
+        ;;
+    esac
+  done
+
+  [[ -n "$manifest" && -f "$manifest" ]] || die "prepare-ai-reviews requires --manifest PATH"
+  [[ -n "$content_report" && -f "$content_report" ]] || die "prepare-ai-reviews requires --content-report PATH"
+  case "$status_filter" in
+    pending|approved|rejected|all) ;;
+    *) die "prepare-ai-reviews --status must be one of: pending, approved, rejected, all" ;;
+  esac
+  if [[ -n "$limit" && ! "$limit" =~ ^[0-9]+$ ]]; then
+    die "prepare-ai-reviews --limit must be a non-negative integer"
+  fi
+
+  if [[ -z "$out" ]]; then
+    out="$(dirname "$content_report")/review_ai.queue.tsv"
+  fi
+
+  write_ai_review_header "$out"
+  tmp_dir="$(mktemp -d)"
+  raw="$tmp_dir/raw.tsv"
+
+  awk -F '\t' -v OFS='\t' -v status_filter="$status_filter" -v include_failed="$include_failed" '
+  FNR==NR {
+    if (FNR == 1) next
+    m_status[$1] = tolower($12)
+    m_score[$1] = $10
+    next
+  }
+  FNR==1 { next }
+  {
+    ref = $1
+    if (!(ref in m_status)) next
+
+    heuristic_status = tolower($10)
+    if (status_filter != "all" && m_status[ref] != status_filter) next
+    if (include_failed != "1" && heuristic_status == "failed") next
+
+    print ref, $2, $3, m_status[ref], m_score[ref], $9, heuristic_status, $11, $12, $13, "", "", "", "", "", "", "", "", "", ""
+  }
+  ' "$manifest" "$content_report" > "$raw"
+
+  if [[ ! -s "$raw" ]]; then
+    rm -rf "$tmp_dir"
+    warn "prepare-ai-reviews found no candidates for the current filters"
+    log "Saved AI review queue: $out"
+    return 0
+  fi
+
+  if [[ -n "$limit" ]]; then
+    sort -t $'\t' -k5,5nr -k1,1 "$raw" | awk -v lim="$limit" 'NR<=lim' >> "$out"
+  else
+    sort -t $'\t' -k5,5nr -k1,1 "$raw" >> "$out"
+  fi
+
+  log "Saved AI review queue: $out"
+  rm -rf "$tmp_dir"
+}
+
+cmd_merge_ai_reviews() {
+  require_cmd awk
+  require_cmd sort
+
+  local out=""
+  local file
+  local tmp_dir raw
+  local -a inputs=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --out)
+        out="${2:-}"
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        inputs+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  [[ -n "$out" ]] || die "merge-ai-reviews requires --out PATH"
+  [[ ${#inputs[@]} -gt 0 ]] || die "merge-ai-reviews requires at least one input report file"
+
+  write_ai_review_header "$out"
+  tmp_dir="$(mktemp -d)"
+  raw="$tmp_dir/raw.tsv"
+  : > "$raw"
+
+  for file in "${inputs[@]}"; do
+    [[ -f "$file" ]] || die "AI review input file does not exist: $file"
+    awk 'NR>1' "$file" >> "$raw"
+  done
+
+  if [[ ! -s "$raw" ]]; then
+    rm -rf "$tmp_dir"
+    warn "merge-ai-reviews found no rows in input reports"
+    log "Saved merged AI review report: $out"
+    return 0
+  fi
+
+  awk -F '\t' '
+  function rec_rank(rec) {
+    r=tolower(rec)
+    if (r=="approved") return 3
+    if (r=="pending") return 2
+    if (r=="rejected") return 1
+    return 0
+  }
+  function decision_rank(dec) {
+    d=tolower(dec)
+    if (d=="approve") return 4
+    if (d=="hold") return 3
+    if (d=="reject") return 2
+    if (d=="") return 0
+    return 1
+  }
+  {
+    ref=$1
+    if (ref == "") next
+
+    rr=rec_rank($16)
+    dr=decision_rank($15)
+    conf=($14=="" ? 0 : $14 + 0)
+    score=($5=="" ? 0 : $5 + 0)
+
+    if (!(ref in best_line)) {
+      best_rec[ref]=rr
+      best_dec[ref]=dr
+      best_conf[ref]=conf
+      best_score[ref]=score
+      best_line[ref]=$0
+      next
+    }
+
+    if (rr > best_rec[ref] ||
+        (rr == best_rec[ref] && dr > best_dec[ref]) ||
+        (rr == best_rec[ref] && dr == best_dec[ref] && conf > best_conf[ref]) ||
+        (rr == best_rec[ref] && dr == best_dec[ref] && conf == best_conf[ref] && score > best_score[ref])) {
+      best_rec[ref]=rr
+      best_dec[ref]=dr
+      best_conf[ref]=conf
+      best_score[ref]=score
+      best_line[ref]=$0
+    }
+  }
+  END {
+    for (ref in best_line) print best_line[ref]
+  }
+  ' "$raw" | sort -t $'\t' -k5,5nr -k1,1 >> "$out"
+
+  log "Saved merged AI review report: $out"
+  rm -rf "$tmp_dir"
+}
+
+cmd_apply_ai_reviews() {
+  require_cmd awk
+
+  local manifest=""
+  local ai_reviews=""
+  local out=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --manifest)
+        manifest="${2:-}"
+        shift 2
+        ;;
+      --ai-reviews)
+        ai_reviews="${2:-}"
+        shift 2
+        ;;
+      --out)
+        out="${2:-}"
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "unknown option for apply-ai-reviews: $1"
+        ;;
+    esac
+  done
+
+  [[ -n "$manifest" && -f "$manifest" ]] || die "apply-ai-reviews requires --manifest PATH"
+  [[ -n "$ai_reviews" && -f "$ai_reviews" ]] || die "apply-ai-reviews requires --ai-reviews PATH"
+
+  if [[ -z "$out" ]]; then
+    out="$(dirname "$manifest")/review_manifest.ai.tsv"
+  fi
+
+  awk -F '\t' -v OFS='\t' '
+  FNR==NR {
+    if (FNR == 1) next
+    ref=$1
+    if (ref == "") next
+
+    rec=tolower($16)
+    if (rec!="approved" && rec!="pending" && rec!="rejected") next
+
+    dec=tolower($15)
+    rel=$11
+    qual=$12
+    risk=$13
+    conf=$14
+    summary=$17
+    reviewer=$19
+    reviewed_at=$20
+
+    gsub(/[\t\r\n]+/, " ", summary)
+    gsub(/[[:space:]]+/, " ", summary)
+    sub(/^ /, "", summary)
+    sub(/ $/, "", summary)
+    if (length(summary) > 120) summary=substr(summary, 1, 117) "..."
+
+    note="ai-review(recommended=" rec ", decision=" dec ", relevance=" rel ", quality=" qual ", risk=" risk ", confidence=" conf
+    if (summary != "") note=note ", summary=" summary
+    note=note ")"
+
+    map_status[ref]=rec
+    map_note[ref]=note
+    map_reviewer[ref]=reviewer
+    map_reviewed_at[ref]=reviewed_at
+    next
+  }
+  FNR==1 { print; next }
+  {
+    ref=$1
+    if (ref in map_status) {
+      $12=map_status[ref]
+      if (map_note[ref] != "") {
+        if ($13 == "") $13=map_note[ref]
+        else $13=$13 "; " map_note[ref]
+      }
+      if (map_reviewer[ref] != "") $14=map_reviewer[ref]
+      if (map_reviewed_at[ref] != "") $15=map_reviewed_at[ref]
+    }
+    print
+  }
+  ' "$ai_reviews" "$manifest" > "$out"
+
+  log "Saved AI-applied manifest: $out"
+}
+
 cmd_collect_legacy() {
   cmd_collect_find "$@"
 }
@@ -1777,6 +2096,9 @@ main() {
     merge) cmd_merge "$@" ;;
     validate-content) cmd_validate_content "$@" ;;
     merge-content-reviews) cmd_merge_content_reviews "$@" ;;
+    prepare-ai-reviews) cmd_prepare_ai_reviews "$@" ;;
+    merge-ai-reviews) cmd_merge_ai_reviews "$@" ;;
+    apply-ai-reviews) cmd_apply_ai_reviews "$@" ;;
     install-approved) cmd_install_approved "$@" ;;
     collect) cmd_collect_legacy "$@" ;;
     install) cmd_install "$@" ;;
