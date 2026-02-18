@@ -452,7 +452,7 @@ cmd_collect_github() {
       [[ -n "$repo" ]] || continue
       list_out="$tmp_dir/$(printf '%s' "$repo" | tr '/.' '__').list.txt"
 
-      if ! FORCE_COLOR=0 npx skills add "$repo" --list > "$list_out" 2>&1; then
+      if ! FORCE_COLOR=0 npx skills add "$repo" --list > "$list_out" 2>&1 < /dev/null; then
         warn "failed to list skills for repo: $repo"
         continue
       fi
@@ -599,7 +599,7 @@ cmd_import_web() {
       repo="${owner}/${repo_name}"
       list_out="$tmp_dir/$(printf '%s' "$repo" | tr '/.' '__').list.txt"
 
-      if ! FORCE_COLOR=0 npx skills add "$repo" --list > "$list_out" 2>&1; then
+      if ! FORCE_COLOR=0 npx skills add "$repo" --list > "$list_out" 2>&1 < /dev/null; then
         warn "failed to list skills from web GitHub repo URL: $repo"
         continue
       fi
@@ -1388,7 +1388,7 @@ cmd_install_approved() {
       local_status="dry-run"
       log "DRY-RUN: $local_cmd_str"
     else
-      if "${cmd[@]}"; then
+      if "${cmd[@]}" < /dev/null; then
         local_status="installed"
       else
         local_status="failed"
@@ -1555,7 +1555,7 @@ cmd_validate_content() {
     sandbox_dir="$tmp_dir/work_${processed}"
     mkdir -p "$sandbox_dir"
     install_out="$tmp_dir/install_${processed}.txt"
-    if (cd "$sandbox_dir" && FORCE_COLOR=0 npx skills add "$repo" --skill "$skill" -y > "$install_out" 2>&1); then
+    if (cd "$sandbox_dir" && FORCE_COLOR=0 npx skills add "$repo" --skill "$skill" -y > "$install_out" 2>&1 < /dev/null); then
       install_check="installed"
       name_check="matched"
     else
@@ -1565,7 +1565,7 @@ cmd_validate_content() {
       list_cache_status_file="$list_cache_dir/${repo_cache_key}.status"
 
       if [[ ! -f "$list_cache_status_file" ]]; then
-        if FORCE_COLOR=0 npx skills add "$repo" --list > "$list_cache_file" 2>&1; then
+        if FORCE_COLOR=0 npx skills add "$repo" --list > "$list_cache_file" 2>&1 < /dev/null; then
           printf 'ok\n' > "$list_cache_status_file"
         else
           printf 'failed\n' > "$list_cache_status_file"

@@ -87,6 +87,7 @@ fixture_dir="${TEST_FIXTURE_DIR:?}"
 log_file="${MOCK_NPX_LOG:-}"
 list_fail_repos=",${MOCK_LIST_FAIL_REPOS:-},"
 allow_any_skill="${MOCK_ALLOW_ANY_SKILL:-0}"
+read_stdin_on_add="${MOCK_NPX_READ_STDIN_ON_ADD:-0}"
 
 if [[ "${1:-}" != "skills" ]]; then
   echo "unexpected npx call: $*" >&2
@@ -118,6 +119,10 @@ case "$sub" in
     repo="${1:-}"
     shift || true
     implicit_skill=""
+
+    if [[ "$read_stdin_on_add" == "1" ]]; then
+      IFS= read -r _ || true
+    fi
 
     if [[ "$repo" == *"@"* ]]; then
       implicit_skill="${repo#*@}"
@@ -288,6 +293,20 @@ test_collect_github_process() {
   [[ "$rows" -ge 2 ]] || return 1
 }
 
+test_collect_github_stdin_safe_process() {
+  local tmp out
+  tmp="$(mktemp -d)"
+  setup_mock_env "$tmp"
+  out="$tmp/candidates.github.tsv"
+
+  TEST_FIXTURE_DIR="$FIXTURE_DIR" MOCK_NPX_READ_STDIN_ON_ADD="1" PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" collect-github --out "$out" --limit 2 --github-query "python skills" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
+
+  assert_file_exists "$out" || return 1
+  assert_row_count "$out" 4 || return 1
+  assert_contains "$out" "example/repo@skill-alpha" || return 1
+  assert_contains "$out" "example/toolbox@skill-beta" || return 1
+}
+
 test_import_web_process() {
   local tmp out
   tmp="$(mktemp -d)"
@@ -309,6 +328,26 @@ EOF_QUERY
   assert_file_exists "$out" || return 1
   assert_contains "$out" "example/repo@skill-alpha" || return 1
   assert_not_contains "$out" "example/repo@skill-beta" || return 1
+}
+
+test_import_web_stdin_safe_process() {
+  local tmp out
+  tmp="$(mktemp -d)"
+  setup_mock_env "$tmp"
+  out="$tmp/candidates.web.tsv"
+
+  cat > "$tmp/web_links.txt" <<'EOF_WEB'
+https://skills.sh/example/repo/skill-alpha
+https://github.com/example/repo
+https://github.com/example/toolbox
+EOF_WEB
+
+  TEST_FIXTURE_DIR="$FIXTURE_DIR" MOCK_NPX_READ_STDIN_ON_ADD="1" PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" import-web --web-links-file "$tmp/web_links.txt" --out "$out" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
+
+  assert_file_exists "$out" || return 1
+  assert_row_count "$out" 4 || return 1
+  assert_contains "$out" "example/repo@skill-alpha" || return 1
+  assert_contains "$out" "example/toolbox@skill-beta" || return 1
 }
 
 test_merge_process() {
@@ -387,6 +426,24 @@ EOF_MANIFEST
 
   assert_row_count "$tmp/review_content.tsv" 1 || return 1
   awk -F '\t' 'NR==2 {exit !($1=="example/repo@skill-beta")}' "$tmp/review_content.tsv" || return 1
+}
+
+test_validate_content_stdin_safe_process() {
+  local tmp
+  tmp="$(mktemp -d)"
+  setup_mock_env "$tmp"
+
+  cat > "$tmp/review_manifest.tsv" <<'EOF_MANIFEST'
+skill_ref	repo	skill	channels	find_installs	top_installs	github_stars	github_updated_at	query_overlap	auto_score	risk_level	status	review_notes	approved_by	approved_at
+example/repo@skill-alpha	example/repo	skill-alpha	find	120	0	0		50.00	60.00	medium	pending	auto	me	
+example/repo2@skill-beta	example/repo2	skill-beta	find	80	0	0		20.00	30.00	high	pending	auto	me	
+example/repo3@skill-alpha	example/repo3	skill-alpha	find	70	0	0		20.00	25.00	high	pending	auto	me	
+EOF_MANIFEST
+
+  TEST_FIXTURE_DIR="$FIXTURE_DIR" MOCK_NPX_READ_STDIN_ON_ADD="1" PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" validate-content --manifest "$tmp/review_manifest.tsv" --status pending --out "$tmp/review_content.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
+
+  assert_file_exists "$tmp/review_content.tsv" || return 1
+  assert_row_count "$tmp/review_content.tsv" 3 || return 1
 }
 
 test_validate_content_optimization_success_process() {
@@ -569,6 +626,25 @@ EOF_MANIFEST
   assert_file_exists "$tmp/install.report.tsv" || return 1
 }
 
+test_install_approved_stdin_safe_process() {
+  local tmp
+  tmp="$(mktemp -d)"
+  setup_mock_env "$tmp"
+
+  cat > "$tmp/review_manifest.tsv" <<'EOF_MANIFEST'
+skill_ref	repo	skill	channels	find_installs	top_installs	github_stars	github_updated_at	query_overlap	auto_score	risk_level	status	review_notes	approved_by	approved_at
+example/repo@skill-alpha	example/repo	skill-alpha	find	120	0	0		50.00	60.00	medium	approved	manual	me	2026-02-16T00:00:00Z
+example/toolbox@skill-beta	example/toolbox	skill-beta	find	100	0	0		45.00	58.00	medium	approved	manual	me	2026-02-16T00:00:00Z
+EOF_MANIFEST
+
+  (cd "$tmp" && TEST_FIXTURE_DIR="$FIXTURE_DIR" MOCK_NPX_READ_STDIN_ON_ADD="1" PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" install-approved --manifest "$tmp/review_manifest.tsv" --report "$tmp/install.report.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt") || return 1
+
+  assert_file_exists "$tmp/install.report.tsv" || return 1
+  assert_row_count "$tmp/install.report.tsv" 2 || return 1
+  assert_contains "$tmp/install.report.tsv" $'\texample/repo\t' || return 1
+  assert_contains "$tmp/install.report.tsv" $'\texample/toolbox\t' || return 1
+}
+
 test_install_approved_exec_audit_process() {
   local tmp
   tmp="$(mktemp -d)"
@@ -690,10 +766,13 @@ log "## Process Suite"
 run_test "process" "collect-find" test_collect_find_process
 run_test "process" "collect-top" test_collect_top_process
 run_test "process" "collect-github" test_collect_github_process
+run_test "process" "collect-github stdin-safe" test_collect_github_stdin_safe_process
 run_test "process" "import-web" test_import_web_process
+run_test "process" "import-web stdin-safe" test_import_web_stdin_safe_process
 run_test "process" "merge" test_merge_process
 run_test "process" "validate-content core" test_validate_content_process
 run_test "process" "validate-content filter" test_validate_content_filter_process
+run_test "process" "validate-content stdin-safe" test_validate_content_stdin_safe_process
 run_test "process" "validate-content optimization (skip list)" test_validate_content_optimization_success_process
 run_test "process" "validate-content optimization (cache list)" test_validate_content_optimization_failure_cache_process
 run_test "process" "merge-content-reviews" test_merge_content_reviews_process
@@ -703,6 +782,7 @@ run_test "process" "apply-ai-reviews" test_apply_ai_reviews_process
 run_test "process" "install --file dry-run" test_install_file_process
 run_test "process" "install --file exec" test_install_file_exec_process
 run_test "process" "install-approved dry-run" test_install_approved_process
+run_test "process" "install-approved stdin-safe" test_install_approved_stdin_safe_process
 run_test "process" "install-approved exec+audit" test_install_approved_exec_audit_process
 run_test "process" "audit" test_audit_process
 
