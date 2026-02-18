@@ -13,6 +13,8 @@ Usage:
   skills_batch_ops.sh collect-github --out PATH --github-query "query" [--github-query "query" ...] [--limit N]
   skills_batch_ops.sh import-web --web-links-file PATH [--out PATH] [--query-file PATH]
   skills_batch_ops.sh merge --out PATH --manifest PATH [--find PATH] [--top PATH] [--github PATH] [--web PATH] [--query-file PATH]
+  skills_batch_ops.sh validate-content --manifest PATH [--out PATH] [--query-file PATH] [--status pending|approved|rejected|all] [--skill-ref REF ...] [--limit N]
+  skills_batch_ops.sh merge-content-reviews --out PATH <content_review_1.tsv> [content_review_2.tsv ...]
   skills_batch_ops.sh install-approved --manifest PATH [--report PATH] [--dry-run] [--no-yes]
   skills_batch_ops.sh install --file PATH [--dry-run] [--no-yes]
   skills_batch_ops.sh audit [--out PATH]
@@ -163,6 +165,12 @@ write_install_report_header() {
   local out="$1"
   ensure_parent_dir "$out"
   printf 'timestamp\trepo\tskills\tstatus\tcommand\n' > "$out"
+}
+
+write_content_review_header() {
+  local out="$1"
+  ensure_parent_dir "$out"
+  printf 'skill_ref\trepo\tskill\tmanifest_status\tauto_score\tname_check\tinstall_check\tskill_md_check\tcontent_overlap\treview_status\tskill_title\tskill_description\tcontent_preview\treview_notes\n' > "$out"
 }
 
 cmd_collect_find() {
@@ -1411,6 +1419,342 @@ cmd_install_approved() {
   rm -rf "$tmp_dir"
 }
 
+cmd_validate_content() {
+  require_cmd npx
+  require_cmd awk
+
+  local manifest=""
+  local out=""
+  local query_file=""
+  local status_filter="pending"
+  local limit=""
+  local manifest_dir=""
+  local tmp_dir=""
+  local processed=0
+  local total_tokens=0
+  local manifest_status_lc=""
+  local skill_ref repo skill auto_score
+  local list_out install_out skill_md_file sandbox_dir listed_skill
+  local name_check install_check skill_md_check content_overlap review_status
+  local title description body_preview content_text token notes
+  local matched=0
+  local preview_max=180
+  local -a selected_refs=()
+  local -a query_tokens=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --manifest)
+        manifest="${2:-}"
+        shift 2
+        ;;
+      --out)
+        out="${2:-}"
+        shift 2
+        ;;
+      --query-file)
+        query_file="${2:-}"
+        shift 2
+        ;;
+      --status)
+        status_filter="$(printf '%s' "${2:-}" | tr '[:upper:]' '[:lower:]')"
+        shift 2
+        ;;
+      --skill-ref)
+        selected_refs+=("${2:-}")
+        shift 2
+        ;;
+      --limit)
+        limit="${2:-}"
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "unknown option for validate-content: $1"
+        ;;
+    esac
+  done
+
+  [[ -n "$manifest" && -f "$manifest" ]] || die "validate-content requires --manifest PATH"
+  case "$status_filter" in
+    pending|approved|rejected|all) ;;
+    *) die "validate-content --status must be one of: pending, approved, rejected, all" ;;
+  esac
+
+  if [[ -n "$limit" && ! "$limit" =~ ^[0-9]+$ ]]; then
+    die "validate-content --limit must be a non-negative integer"
+  fi
+
+  manifest_dir="$(dirname "$manifest")"
+  if [[ -z "$out" ]]; then
+    out="$manifest_dir/review_content.tsv"
+  fi
+
+  if [[ -z "$query_file" ]]; then
+    if [[ -f "$manifest_dir/query_seeds.txt" ]]; then
+      query_file="$manifest_dir/query_seeds.txt"
+    fi
+  fi
+
+  if [[ -n "$query_file" && -f "$query_file" ]]; then
+    while IFS= read -r token; do
+      [[ -n "$token" ]] && query_tokens+=("$token")
+    done < <(load_query_tokens "$query_file")
+  fi
+  total_tokens="${#query_tokens[@]}"
+
+  write_content_review_header "$out"
+  tmp_dir="$(mktemp -d)"
+
+  is_selected_ref() {
+    local target_ref="$1"
+    local wanted_ref
+    if [[ ${#selected_refs[@]} -eq 0 ]]; then
+      return 0
+    fi
+    for wanted_ref in "${selected_refs[@]}"; do
+      if [[ "$target_ref" == "$wanted_ref" ]]; then
+        return 0
+      fi
+    done
+    return 1
+  }
+
+  while IFS=$'\037' read -r skill_ref repo skill manifest_status_lc auto_score; do
+    [[ -n "$skill_ref" && -n "$repo" && -n "$skill" ]] || continue
+
+    if [[ "$status_filter" != "all" && "$manifest_status_lc" != "$status_filter" ]]; then
+      continue
+    fi
+
+    if ! is_selected_ref "$skill_ref"; then
+      continue
+    fi
+
+    if [[ -n "$limit" && "$processed" -ge "$limit" ]]; then
+      break
+    fi
+    processed=$((processed + 1))
+
+    list_out="$tmp_dir/list_${processed}.txt"
+    if FORCE_COLOR=0 npx skills add "$repo" --list > "$list_out" 2>&1; then
+      name_check="not_found"
+      while IFS= read -r listed_skill; do
+        if [[ "$listed_skill" == "$skill" ]]; then
+          name_check="matched"
+          break
+        fi
+      done < <(extract_skill_names_from_list_file "$list_out")
+    else
+      name_check="list_failed"
+    fi
+
+    sandbox_dir="$tmp_dir/work_${processed}"
+    mkdir -p "$sandbox_dir"
+    install_out="$tmp_dir/install_${processed}.txt"
+    if (cd "$sandbox_dir" && FORCE_COLOR=0 npx skills add "$repo" --skill "$skill" -y > "$install_out" 2>&1); then
+      install_check="installed"
+    else
+      install_check="install_failed"
+    fi
+
+    skill_md_file="$sandbox_dir/.agents/skills/$skill/SKILL.md"
+    title=""
+    description=""
+    body_preview=""
+    if [[ -f "$skill_md_file" ]]; then
+      skill_md_check="present"
+      description="$(
+        awk '
+        NR==1 && $0=="---" {in_front=1; next}
+        in_front && $0=="---" {exit}
+        in_front && $0 ~ /^description:[[:space:]]*/ {
+          line=$0
+          sub(/^description:[[:space:]]*/, "", line)
+          gsub(/^"/, "", line)
+          gsub(/"$/, "", line)
+          print line
+          exit
+        }
+        ' "$skill_md_file" 2>/dev/null || true
+      )"
+      title="$(
+        awk '
+        NR==1 && $0=="---" {in_front=1; next}
+        in_front && $0=="---" {in_front=0; next}
+        in_front {next}
+        $0 ~ /^#[[:space:]]+/ {
+          line=$0
+          sub(/^#[[:space:]]+/, "", line)
+          print line
+          exit
+        }
+        ' "$skill_md_file" 2>/dev/null || true
+      )"
+      body_preview="$(
+        awk '
+        NR==1 && $0=="---" {in_front=1; next}
+        in_front && $0=="---" {in_front=0; next}
+        in_front {next}
+        {
+          line=$0
+          gsub(/\r/, "", line)
+          if (line ~ /^[[:space:]]*$/) next
+          if (line ~ /^#/) next
+          gsub(/[[:space:]]+/, " ", line)
+          sub(/^ /, "", line)
+          sub(/ $/, "", line)
+          if (line == "") next
+          printf "%s ", line
+          count++
+          if (count >= 3) exit
+        }
+        ' "$skill_md_file" 2>/dev/null || true
+      )"
+    else
+      skill_md_check="missing"
+    fi
+
+    title="$(sanitize_field "$title")"
+    description="$(sanitize_field "$description")"
+    body_preview="$(sanitize_field "$body_preview")"
+    if [[ ${#body_preview} -gt "$preview_max" ]]; then
+      body_preview="${body_preview:0:177}..."
+    fi
+
+    matched=0
+    if [[ "$total_tokens" -gt 0 ]]; then
+      content_text="$(printf '%s %s %s %s %s' "$repo" "$skill" "$title" "$description" "$body_preview" | tr '[:upper:]' '[:lower:]')"
+      for token in "${query_tokens[@]}"; do
+        if [[ "$content_text" == *"$token"* ]]; then
+          matched=$((matched + 1))
+        fi
+      done
+      content_overlap="$(awk -v m="$matched" -v t="$total_tokens" 'BEGIN{printf "%.2f", (m/t)*100}')"
+    else
+      content_overlap="0.00"
+    fi
+
+    if [[ "$name_check" == "matched" && "$skill_md_check" == "present" ]]; then
+      if [[ "$total_tokens" -eq 0 || "$matched" -gt 0 ]]; then
+        review_status="verified"
+        notes="name and SKILL.md verified; query token hits=${matched}/${total_tokens}"
+      else
+        review_status="manual"
+        notes="name and SKILL.md verified but no query token hit"
+      fi
+    else
+      review_status="failed"
+      notes="verification failed: name_check=${name_check}, skill_md_check=${skill_md_check}, install_check=${install_check}"
+    fi
+
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$skill_ref" "$repo" "$skill" "$manifest_status_lc" "$auto_score" "$name_check" "$install_check" "$skill_md_check" \
+      "$content_overlap" "$review_status" "$(sanitize_field "$title")" "$(sanitize_field "$description")" \
+      "$(sanitize_field "$body_preview")" "$(sanitize_field "$notes")" >> "$out"
+  done < <(
+    awk -F '\t' '
+    NR>1 {
+      printf "%s\037%s\037%s\037%s\037%s\n", $1, $2, $3, tolower($12), $10
+    }
+    ' "$manifest"
+  )
+
+  if [[ "$processed" -eq 0 ]]; then
+    warn "validate-content found no rows for the current filters"
+  fi
+
+  log "Saved content review report: $out"
+  rm -rf "$tmp_dir"
+}
+
+cmd_merge_content_reviews() {
+  require_cmd awk
+  require_cmd sort
+
+  local out=""
+  local file
+  local tmp_dir raw
+  local -a inputs=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --out)
+        out="${2:-}"
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        inputs+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  [[ -n "$out" ]] || die "merge-content-reviews requires --out PATH"
+  [[ ${#inputs[@]} -gt 0 ]] || die "merge-content-reviews requires at least one input report file"
+
+  write_content_review_header "$out"
+  tmp_dir="$(mktemp -d)"
+  raw="$tmp_dir/raw.tsv"
+  : > "$raw"
+
+  for file in "${inputs[@]}"; do
+    [[ -f "$file" ]] || die "content review input file does not exist: $file"
+    awk 'NR>1' "$file" >> "$raw"
+  done
+
+  if [[ ! -s "$raw" ]]; then
+    rm -rf "$tmp_dir"
+    warn "merge-content-reviews found no rows in input reports"
+    log "Saved merged content review report: $out"
+    return 0
+  fi
+
+  awk -F '\t' '
+  function rank(status) {
+    s=tolower(status)
+    if (s=="verified") return 1
+    if (s=="manual") return 2
+    if (s=="failed") return 3
+    return 9
+  }
+  {
+    ref=$1
+    if (ref == "") next
+    r=rank($10)
+    if (!(ref in best_rank)) {
+      best_rank[ref]=r
+      best_line[ref]=$0
+      next
+    }
+    if (r < best_rank[ref]) {
+      best_rank[ref]=r
+      best_line[ref]=$0
+      next
+    }
+    if (r == best_rank[ref]) {
+      split(best_line[ref], prev, FS)
+      if (($5 + 0) > (prev[5] + 0)) {
+        best_line[ref]=$0
+      }
+    }
+  }
+  END {
+    for (ref in best_line) print best_rank[ref] "\t" best_line[ref]
+  }
+  ' "$raw" | sort -t $'\t' -k1,1n -k6,6nr -k2,2 | cut -f2- >> "$out"
+
+  log "Saved merged content review report: $out"
+  rm -rf "$tmp_dir"
+}
+
 cmd_collect_legacy() {
   cmd_collect_find "$@"
 }
@@ -1431,6 +1775,8 @@ main() {
     collect-github) cmd_collect_github "$@" ;;
     import-web) cmd_import_web "$@" ;;
     merge) cmd_merge "$@" ;;
+    validate-content) cmd_validate_content "$@" ;;
+    merge-content-reviews) cmd_merge_content_reviews "$@" ;;
     install-approved) cmd_install_approved "$@" ;;
     collect) cmd_collect_legacy "$@" ;;
     install) cmd_install "$@" ;;

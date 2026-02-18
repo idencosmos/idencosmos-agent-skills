@@ -96,7 +96,41 @@ case "$sub" in
 └  Use --skill <name> to install specific skills
 LIST
     else
-      echo "MOCK_ADD repo=${repo} args=$*"
+      skills=()
+      while [[ $# -gt 0 ]]; do
+        case "${1:-}" in
+          --skill)
+            skills+=("${2:-}")
+            shift 2
+            ;;
+          -y|--yes)
+            shift
+            ;;
+          *)
+            shift
+            ;;
+        esac
+      done
+
+      for skill in "${skills[@]}"; do
+        if [[ "$skill" != "skill-alpha" && "$skill" != "skill-beta" ]]; then
+          echo "unknown skill: $skill" >&2
+          exit 1
+        fi
+
+        mkdir -p ".agents/skills/$skill"
+        cat > ".agents/skills/$skill/SKILL.md" <<EOF_SKILL
+---
+name: $skill
+description: ${skill} for python observability and resilience checks.
+---
+# $skill
+
+This skill improves python observability and workflow reliability.
+EOF_SKILL
+      done
+
+      echo "MOCK_ADD repo=${repo} skills=${skills[*]}"
     fi
     ;;
   list)
@@ -325,6 +359,78 @@ EOF_BACKLOG
   awk 'NF{c++} END{exit !(c>0)}' "$run_dir/query_seeds.txt" || return 1
 }
 
+run_validate_content_report() {
+  local tmp
+  tmp="$(mktemp -d)"
+  setup_mock_env "$tmp"
+
+  cat > "$tmp/review_manifest.tsv" <<'EOF_MANIFEST'
+skill_ref	repo	skill	channels	find_installs	top_installs	github_stars	github_updated_at	query_overlap	auto_score	risk_level	status	review_notes	approved_by	approved_at
+example/repo@skill-alpha	example/repo	skill-alpha	find	120	0	0		50.00	60.00	medium	pending	auto	me	
+example/repo@skill-gamma	example/repo	skill-gamma	find	80	0	0		20.00	30.00	high	pending	auto	me	
+EOF_MANIFEST
+
+  cat > "$tmp/query.txt" <<'EOF_QUERY'
+python observability
+workflow reliability
+EOF_QUERY
+
+  TEST_FIXTURE_DIR="$FIXTURE_DIR" PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" validate-content \
+    --manifest "$tmp/review_manifest.tsv" \
+    --query-file "$tmp/query.txt" \
+    --status pending \
+    --out "$tmp/review_content.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
+
+  assert_file_exists "$tmp/review_content.tsv" || return 1
+  awk -F '\t' 'NR>1 && $1=="example/repo@skill-alpha" {exit !($6=="matched" && $7=="installed" && $8=="present" && $10=="verified")}' "$tmp/review_content.tsv" || return 1
+  awk -F '\t' 'NR>1 && $1=="example/repo@skill-gamma" {exit !($6=="not_found" && $7=="install_failed" && $8=="missing" && $10=="failed")}' "$tmp/review_content.tsv" || return 1
+}
+
+run_validate_content_single_skill_ref() {
+  local tmp rows
+  tmp="$(mktemp -d)"
+  setup_mock_env "$tmp"
+
+  cat > "$tmp/review_manifest.tsv" <<'EOF_MANIFEST'
+skill_ref	repo	skill	channels	find_installs	top_installs	github_stars	github_updated_at	query_overlap	auto_score	risk_level	status	review_notes	approved_by	approved_at
+example/repo@skill-alpha	example/repo	skill-alpha	find	120	0	0		50.00	60.00	medium	pending	auto	me	
+example/repo@skill-beta	example/repo	skill-beta	find	80	0	0		20.00	30.00	high	pending	auto	me	
+EOF_MANIFEST
+
+  TEST_FIXTURE_DIR="$FIXTURE_DIR" PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" validate-content \
+    --manifest "$tmp/review_manifest.tsv" \
+    --status pending \
+    --skill-ref "example/repo@skill-beta" \
+    --out "$tmp/review_content.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
+
+  rows="$(awk 'END{print NR-1}' "$tmp/review_content.tsv")"
+  [[ "$rows" -eq 1 ]] || return 1
+  awk -F '\t' 'NR==2 {exit !($1=="example/repo@skill-beta")}' "$tmp/review_content.tsv" || return 1
+}
+
+run_merge_content_reviews() {
+  local tmp rows
+  tmp="$(mktemp -d)"
+
+  cat > "$tmp/worker1.tsv" <<'EOF_REVIEW'
+skill_ref	repo	skill	manifest_status	auto_score	name_check	install_check	skill_md_check	content_overlap	review_status	skill_title	skill_description	content_preview	review_notes
+example/repo@skill-alpha	example/repo	skill-alpha	pending	60.00	matched	installed	present	80.00	manual	Skill Alpha	alpha desc	alpha preview	worker1
+example/repo@skill-beta	example/repo	skill-beta	pending	40.00	matched	installed	present	75.00	verified	Skill Beta	beta desc	beta preview	worker1
+EOF_REVIEW
+
+  cat > "$tmp/worker2.tsv" <<'EOF_REVIEW'
+skill_ref	repo	skill	manifest_status	auto_score	name_check	install_check	skill_md_check	content_overlap	review_status	skill_title	skill_description	content_preview	review_notes
+example/repo@skill-alpha	example/repo	skill-alpha	pending	58.00	matched	installed	present	70.00	verified	Skill Alpha	alpha desc	alpha preview	worker2
+EOF_REVIEW
+
+  "$SCRIPT_PATH" merge-content-reviews --out "$tmp/merged.tsv" "$tmp/worker1.tsv" "$tmp/worker2.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
+
+  assert_file_exists "$tmp/merged.tsv" || return 1
+  rows="$(awk 'END{print NR-1}' "$tmp/merged.tsv")"
+  [[ "$rows" -eq 2 ]] || return 1
+  awk -F '\t' 'NR>1 && $1=="example/repo@skill-alpha" {exit !($10=="verified")}' "$tmp/merged.tsv" || return 1
+}
+
 run_install_audit_log() {
   local tmp
   tmp="$(mktemp -d)"
@@ -350,6 +456,9 @@ run_test "install-approved dry-run gate" run_install_approved_dry_run_gate
 run_test "install-approved no-approved" run_install_approved_no_approved
 run_test "run e2e artifacts" run_e2e_run_outputs
 run_test "run e2e artifacts with auto queries" run_e2e_run_outputs_auto_queries
+run_test "validate-content report" run_validate_content_report
+run_test "validate-content with skill-ref filter" run_validate_content_single_skill_ref
+run_test "merge-content-reviews dedupe" run_merge_content_reviews
 run_test "install-approved writes audit" run_install_audit_log
 
 log ""
