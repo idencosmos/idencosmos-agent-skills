@@ -1,0 +1,13 @@
+# BEGIN project-agent-factory managed agents
+# generated_at=2026-02-18T13:31:25Z
+# This block is managed by project-agent-factory.
+
+[agents.paf_explorer]
+description = "Explore repository structure and produce scoped evidence maps."
+config_file = "agents/paf_explorer.toml"
+
+[agents.paf_implementer]
+description = "Implement code changes with clear constraints and verification."
+config_file = "agents/paf_implementer.toml"
+
+# END project-agent-factory managed agents

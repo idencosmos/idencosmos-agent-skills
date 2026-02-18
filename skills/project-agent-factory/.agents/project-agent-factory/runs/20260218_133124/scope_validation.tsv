@@ -1,0 +1,6 @@
+path	within_scope	note
+/Users/idencosmos/Projects/skills-hub/idencosmos-agent-skills/skills/project-agent-factory/.codex	yes	inside project root
+/Users/idencosmos/Projects/skills-hub/idencosmos-agent-skills/skills/project-agent-factory/.codex/agents	yes	inside project root
+/Users/idencosmos/Projects/skills-hub/idencosmos-agent-skills/skills/project-agent-factory/.codex/agents/paf_explorer.toml	yes	inside project root
+/Users/idencosmos/Projects/skills-hub/idencosmos-agent-skills/skills/project-agent-factory/.codex/agents/paf_implementer.toml	yes	inside project root
+/Users/idencosmos/Projects/skills-hub/idencosmos-agent-skills/skills/project-agent-factory/.codex/config.toml	yes	inside project root

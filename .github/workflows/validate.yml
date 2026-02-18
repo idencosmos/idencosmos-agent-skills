@@ -11,6 +11,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
       - name: Ensure SKILL.md exists for each skill directory
         shell: bash
@@ -34,3 +40,24 @@ jobs:
           if [ "$found" -eq 0 ]; then
             echo "No skill directories yet. Skipping strict checks."
           fi
+
+      - name: Validate skill frontmatter and naming rules
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/validate_skill.py skills
+
+      - name: Skills CLI smoke test (list + install)
+        shell: bash
+        run: |
+          set -euo pipefail
+          FORCE_COLOR=0 npx --yes skills add . --list >/tmp/skills-list.log
+          for d in skills/*; do
+            [ -d "$d" ] || continue
+            skill_name="$(basename "$d")"
+            tmp_dir="$(mktemp -d)"
+            (
+              cd "$tmp_dir"
+              FORCE_COLOR=0 npx --yes skills add "$GITHUB_WORKSPACE" --skill "$skill_name" -y >/tmp/skills-install-"$skill_name".log
+            )
+          done

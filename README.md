@@ -16,7 +16,8 @@ npx skills add idencosmos/idencosmos-agent-skills --skill <skill-name> -y
 
 ## Published Skills
 
-- `skills-batch-ops`: 운영형 배치 워크플로우로 프로젝트 요구사항 분석, 다중 채널(Find/Top/GitHub/Web) 후보 수집, 리뷰 매니페스트 승인 게이트, 승인 기반 설치, 감사 로그까지 일괄 수행.
+- `skills-batch-ops`: 외부 AI 오케스트레이터가 만든 후보/리뷰 결과에 대해 병렬 실행 증거와 설치 안전 게이트를 강제 검증하고, `approved + gate_pass` 항목만 설치.
+- `project-agent-factory`: 프로젝트를 자동 탐색해 Codex 멀티 에이전트 구성을 제안하고, 프로젝트 내부 `.codex/config.toml` 및 `.codex/agents/*.toml`을 안전하게 생성/갱신.
 
 ## Development
 

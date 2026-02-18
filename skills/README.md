@@ -11,3 +11,4 @@ Example:
 Current skills:
 
 - `skills/skills-batch-ops/SKILL.md`
+- `skills/project-agent-factory/SKILL.md`
