@@ -20,10 +20,23 @@ description: AI가 생성한 agent_plan.tsv를 엄격 검증한 뒤 프로젝트
 - 실행으로 생성된 `.codex/` 및 `.agents/project-agent-factory/runs/` 산출물은 대상 프로젝트 산출물로 취급하고 스킬 원본에 포함하지 마세요.
 - 계획 생성/자동 탐색이 필요하면 다른 스킬이나 별도 AI 단계를 먼저 실행한 뒤, 최종 `agent_plan.tsv`가 준비된 상태에서만 이 스킬을 실행하세요.
 
+## Preflight
+
+- 필수 명령이 있는지 먼저 확인하세요: `bash`, `awk`, `find`, `head`, `rg`, `sort`
+- 아래처럼 `PAF_SCRIPT`를 먼저 해석한 뒤 실행하세요.
+
 ## Quick Start
 
 ```bash
-PAF_SCRIPT="$HOME/.agents/skills/project-agent-factory/scripts/agent_factory.sh"
+PAF_SCRIPT="${PAF_SCRIPT:-$HOME/.agents/skills/project-agent-factory/scripts/agent_factory.sh}"
+if [[ ! -x "$PAF_SCRIPT" && -x "$(pwd)/skills/project-agent-factory/scripts/agent_factory.sh" ]]; then
+  PAF_SCRIPT="$(pwd)/skills/project-agent-factory/scripts/agent_factory.sh"
+fi
+if [[ ! -x "$PAF_SCRIPT" ]]; then
+  echo "error: set PAF_SCRIPT to project-agent-factory/scripts/agent_factory.sh" >&2
+  exit 1
+fi
+
 RUN_DIR=".agents/project-agent-factory/runs/$(date -u +%Y%m%d_%H%M%S)"
 
 mkdir -p "$RUN_DIR"
@@ -80,6 +93,14 @@ agent_id	role_name	priority	reason	config_relpath	description	developer_instruct
 - `apply_report.tsv`: 실제 파일 생성/갱신/정리 결과
 - `scope_validation.tsv`: 프로젝트 경로 제한 검증 결과
 - 위 두 파일을 근거로 AI 요약/감사 텍스트를 생성하세요.
+
+## Smoke Test
+
+필요할 때 아래 테스트를 실행해 `apply-plan` 계약(스키마/경로/레거시 커맨드 비노출)이 유지되는지 확인하세요.
+
+```bash
+bash "$HOME/.agents/skills/project-agent-factory/tests/test_agent_factory.sh"
+```
 
 ## Migration Note
 
