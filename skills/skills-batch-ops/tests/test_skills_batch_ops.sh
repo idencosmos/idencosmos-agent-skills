@@ -341,48 +341,41 @@ test_verify_parallel_proof_fail_stage_mismatch_process() {
   assert_contains "$tmp/review_parallel_summary.json" 'expected_stage_mismatch' || return 1
 }
 
-test_validate_content_gate_process() {
+test_verify_parallel_proof_fail_same_worker_overlap_process() {
   local tmp
   tmp="$(mktemp -d)"
 
-  cat > "$tmp/review_manifest.tsv" <<'EOF_MANIFEST'
-skill_ref	repo	skill	discovery_channels	discovery_summary	discovery_confidence	status	review_notes	approved_by	approved_at	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision
-example/repo@skill-alpha	example/repo	skill-alpha	find	alpha	0.8	pending	note							
-bad-format	example/repo	skill-alpha	find	bad	0.3	pending	note							
-example/repo@skill-beta	example/other	skill-beta	find	mismatch	0.3	pending	note							
-example/repo@unknown-skill	example/repo	unknown-skill	find	unknown	0.3	pending	note							
-example/repo@skill-fail-install	example/repo	skill-fail-install	find	fail-install	0.3	pending	note							
-EOF_MANIFEST
+  cat > "$tmp/review_discovery.queue.tsv" <<'EOF_Q'
+task_id	expected_stage
+D001	discovery
+D002	discovery
+D003	discovery
+EOF_Q
 
-  "$SCRIPT_PATH" validate-content --manifest "$tmp/review_manifest.tsv" --status pending --out "$tmp/review_content.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
+  cat > "$tmp/worker.tsv" <<'EOF_W'
+task_id	expected_stage	worker_run_id	worker_id	worker_started_at	worker_finished_at	worker_attempt	orchestrator_name
+D001	discovery	run-1	worker-1	2026-02-18T10:00:00Z	2026-02-18T10:10:00Z	1	orch-x
+D002	discovery	run-2	worker-1	2026-02-18T10:05:00Z	2026-02-18T10:15:00Z	1	orch-x
+D003	discovery	run-3	worker-2	2026-02-18T10:20:00Z	2026-02-18T10:30:00Z	1	orch-x
+EOF_W
 
-  assert_row_count "$tmp/review_content.tsv" 5 || return 1
-  awk -F '\t' 'NR>1 && $1=="example/repo@skill-alpha" {exit !($5=="format_ok" && $6=="deferred_to_install" && $7=="deferred_to_install" && $8=="gate_pass" && $9=="provisional_ai_gate")}' "$tmp/review_content.tsv" || return 1
-  awk -F '\t' 'NR>1 && $1=="bad-format" {exit !($5=="invalid_ref" && $8=="gate_fail" && $9=="invalid_ref")}' "$tmp/review_content.tsv" || return 1
-  awk -F '\t' 'NR>1 && $1=="example/repo@skill-beta" {exit !($5=="invalid_ref" && $8=="gate_fail" && $9=="invalid_ref")}' "$tmp/review_content.tsv" || return 1
-  awk -F '\t' 'NR>1 && $1=="example/repo@unknown-skill" {exit !($5=="format_ok" && $8=="gate_pass" && $9=="provisional_ai_gate")}' "$tmp/review_content.tsv" || return 1
-  awk -F '\t' 'NR>1 && $1=="example/repo@skill-fail-install" {exit !($5=="format_ok" && $8=="gate_pass" && $9=="provisional_ai_gate")}' "$tmp/review_content.tsv" || return 1
+  if "$SCRIPT_PATH" verify-parallel-proof \
+    --stage discovery \
+    --queue "$tmp/review_discovery.queue.tsv" \
+    --out "$tmp/discovery_parallel_proof.tsv" \
+    --summary "$tmp/discovery_parallel_summary.json" \
+    "$tmp/worker.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt"; then
+    log "assertion failed: expected serial execution failure when overlap is single-worker only"
+    return 1
+  fi
+
+  assert_contains "$tmp/discovery_parallel_summary.json" 'serial_execution_detected' || return 1
+  assert_contains "$tmp/discovery_parallel_summary.json" '"unique_workers": 2' || return 1
+  assert_contains "$tmp/discovery_parallel_summary.json" '"overlap_pairs": 0' || return 1
+  assert_contains "$tmp/discovery_parallel_summary.json" '"overlap_pairs_total": 1' || return 1
 }
 
-test_validate_content_stdin_safe_process() {
-  local tmp
-  tmp="$(mktemp -d)"
-
-  cat > "$tmp/review_manifest.tsv" <<'EOF_MANIFEST'
-repo	skill_ref	skill	discovery_channels	discovery_summary	discovery_confidence	manifest_status	review_notes	approved_by	approved_at	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision
-example/repo	example/repo@skill-alpha	skill-alpha	find	alpha	0.8	pending	note							
-example/repo2	example/repo2@skill-beta	skill-beta	find	beta	0.7	pending	note							
-example/repo3	example/repo3@skill-alpha	skill-alpha	find	alpha2	0.6	pending	note							
-EOF_MANIFEST
-
-  "$SCRIPT_PATH" validate-content --manifest "$tmp/review_manifest.tsv" --status pending --out "$tmp/review_content.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
-
-  assert_row_count "$tmp/review_content.tsv" 3 || return 1
-  awk -F '\t' 'NR>1 && $8!="gate_pass" {exit 1} END{exit 0}' "$tmp/review_content.tsv" || return 1
-  awk -F '\t' 'NR>1 && $9!="provisional_ai_gate" {exit 1} END{exit 0}' "$tmp/review_content.tsv" || return 1
-}
-
-test_install_approved_requires_proof_process() {
+test_validate_content_deprecated_process() {
   local tmp
   tmp="$(mktemp -d)"
   setup_mock_env "$tmp"
@@ -392,12 +385,25 @@ skill_ref	repo	skill	discovery_channels	discovery_summary	discovery_confidence	s
 example/repo@skill-alpha	example/repo	skill-alpha	find	alpha	0.9	approved	note	reviewer	2026-02-18T12:00:00Z	90	88	20	0.95	approve
 EOF_MANIFEST
 
-cat > "$tmp/review_content.tsv" <<'EOF_CONTENT'
-skill_ref	repo	skill	manifest_status	name_check	install_check	skill_md_check	gate_status	gate_reason	gate_notes
-example/repo@skill-alpha	example/repo	skill-alpha	approved	format_ok	deferred_to_install	deferred_to_install	gate_pass	provisional_ai_gate	structure-only validation passed; install/runtime checks deferred to install-approved
-EOF_CONTENT
+  if PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" validate-content --manifest "$tmp/review_manifest.ai.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt"; then
+    log "assertion failed: validate-content should be deprecated"
+    return 1
+  fi
 
-  if PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" install-approved --manifest "$tmp/review_manifest.ai.tsv" --content-report "$tmp/review_content.tsv" --dry-run > "$tmp/stdout.txt" 2> "$tmp/stderr.txt"; then
+  assert_contains "$tmp/stderr.txt" "removed in gate-only mode" || return 1
+}
+
+test_install_approved_requires_proof_process() {
+  local tmp
+  tmp="$(mktemp -d)"
+  setup_mock_env "$tmp"
+
+cat > "$tmp/review_manifest.ai.tsv" <<'EOF_MANIFEST'
+skill_ref	repo	skill	discovery_channels	discovery_summary	discovery_confidence	status	review_notes	approved_by	approved_at	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision
+example/repo@skill-alpha	example/repo	skill-alpha	find	alpha	0.9	approved	note	reviewer	2026-02-18T12:00:00Z	90	88	20	0.95	approve
+EOF_MANIFEST
+
+  if PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" install-approved --manifest "$tmp/review_manifest.ai.tsv" --dry-run > "$tmp/stdout.txt" 2> "$tmp/stderr.txt"; then
     log "assertion failed: install-approved must fail without proof"
     return 1
   fi
@@ -410,21 +416,16 @@ test_install_approved_fails_when_proof_failed_process() {
   tmp="$(mktemp -d)"
   setup_mock_env "$tmp"
 
-  cat > "$tmp/review_manifest.ai.tsv" <<'EOF_MANIFEST'
+cat > "$tmp/review_manifest.ai.tsv" <<'EOF_MANIFEST'
 skill_ref	repo	skill	discovery_channels	discovery_summary	discovery_confidence	status	review_notes	approved_by	approved_at	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision
 example/repo@skill-alpha	example/repo	skill-alpha	find	alpha	0.9	approved	note	reviewer	2026-02-18T12:00:00Z	90	88	20	0.95	approve
 EOF_MANIFEST
-
-cat > "$tmp/review_content.tsv" <<'EOF_CONTENT'
-skill_ref	repo	skill	manifest_status	name_check	install_check	skill_md_check	gate_status	gate_reason	gate_notes
-example/repo@skill-alpha	example/repo	skill-alpha	approved	format_ok	deferred_to_install	deferred_to_install	gate_pass	provisional_ai_gate	structure-only validation passed; install/runtime checks deferred to install-approved
-EOF_CONTENT
 
   cat > "$tmp/parallel_proof.summary.json" <<'EOF_SUMMARY'
 {"passed":false,"reason_codes":["serial_execution_detected"],"stages":{}}
 EOF_SUMMARY
 
-  if PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" install-approved --manifest "$tmp/review_manifest.ai.tsv" --proof "$tmp/parallel_proof.summary.json" --content-report "$tmp/review_content.tsv" --dry-run > "$tmp/stdout.txt" 2> "$tmp/stderr.txt"; then
+  if PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" install-approved --manifest "$tmp/review_manifest.ai.tsv" --proof "$tmp/parallel_proof.summary.json" --dry-run > "$tmp/stdout.txt" 2> "$tmp/stderr.txt"; then
     log "assertion failed: install-approved must fail when proof is not passed"
     return 1
   fi
@@ -432,7 +433,7 @@ EOF_SUMMARY
   assert_contains "$tmp/stderr.txt" 'parallel proof failed' || return 1
 }
 
-test_install_approved_requires_gate_pass_process() {
+test_install_approved_rejects_content_report_option_process() {
   local tmp
   tmp="$(mktemp -d)"
   setup_mock_env "$tmp"
@@ -443,26 +444,19 @@ example/repo	example/repo@skill-alpha	skill-alpha	find	alpha	0.9	approved	note	r
 example/toolbox	example/toolbox@skill-beta	skill-beta	github	beta	0.8	approved	note	reviewer	2026-02-18T12:01:00Z	88	84	25	0.90	approve
 EOF_MANIFEST
 
-cat > "$tmp/review_content.tsv" <<'EOF_CONTENT'
-skill_ref	repo	skill	manifest_status	name_check	install_check	skill_md_check	gate_status	gate_reason	gate_notes
-example/repo@skill-alpha	example/repo	skill-alpha	approved	format_ok	deferred_to_install	deferred_to_install	gate_pass	provisional_ai_gate	structure-only validation passed; install/runtime checks deferred to install-approved
-example/toolbox@skill-beta	example/toolbox	skill-beta	approved	format_ok	deferred_to_install	deferred_to_install	gate_fail	install_failed	single skill installation failed
-EOF_CONTENT
-
   cat > "$tmp/parallel_proof.summary.json" <<'EOF_SUMMARY'
 {"passed":true,"reason_codes":[],"stages":{"discovery":{"passed":true},"review":{"passed":true}}}
 EOF_SUMMARY
 
   if PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" install-approved --manifest "$tmp/review_manifest.ai.tsv" --proof "$tmp/parallel_proof.summary.json" --content-report "$tmp/review_content.tsv" --dry-run > "$tmp/stdout.txt" 2> "$tmp/stderr.txt"; then
-    log "assertion failed: install-approved must fail when approved item is not gate_pass"
+    log "assertion failed: install-approved must reject deprecated --content-report option"
     return 1
   fi
 
-  assert_contains "$tmp/stderr.txt" 'approved skills missing gate_pass in content report' || return 1
-  assert_contains "$tmp/stderr.txt" 'example/toolbox@skill-beta' || return 1
+  assert_contains "$tmp/stderr.txt" 'unknown option for install-approved: --content-report' || return 1
 }
 
-test_install_approved_process() {
+test_install_approved_structure_gate_without_content_report_process() {
   local tmp
   tmp="$(mktemp -d)"
   setup_mock_env "$tmp"
@@ -470,22 +464,39 @@ test_install_approved_process() {
   cat > "$tmp/review_manifest.ai.tsv" <<'EOF_MANIFEST'
 skill_ref	repo	skill	discovery_channels	discovery_summary	discovery_confidence	status	review_notes	approved_by	approved_at	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision
 example/repo@skill-alpha	example/repo	skill-alpha	find	alpha	0.9	approved	note	reviewer	2026-02-18T12:00:00Z	90	88	20	0.95	approve
-example/repo@skill-beta	example/repo	skill-beta	find	beta	0.7	pending	note			60	55	40	0.70	hold
-example/toolbox@skill-beta	example/toolbox	skill-beta	github	beta2	0.8	approved	note	reviewer	2026-02-18T12:03:00Z	88	80	25	0.90	approve
+bad-format	example/repo	skill-alpha	find	alpha	0.7	approved	note	reviewer	2026-02-18T12:01:00Z	80	75	30	0.80	approve
 EOF_MANIFEST
-
-cat > "$tmp/review_content.tsv" <<'EOF_CONTENT'
-skill_ref	repo	skill	manifest_status	name_check	install_check	skill_md_check	gate_status	gate_reason	gate_notes
-example/repo@skill-alpha	example/repo	skill-alpha	approved	format_ok	deferred_to_install	deferred_to_install	gate_pass	provisional_ai_gate	structure-only validation passed; install/runtime checks deferred to install-approved
-example/repo@skill-beta	example/repo	skill-beta	pending	format_ok	deferred_to_install	deferred_to_install	gate_fail	invalid_ref	skill_ref/repo/skill consistency check failed
-example/toolbox@skill-beta	example/toolbox	skill-beta	approved	format_ok	deferred_to_install	deferred_to_install	gate_pass	provisional_ai_gate	structure-only validation passed; install/runtime checks deferred to install-approved
-EOF_CONTENT
 
   cat > "$tmp/parallel_proof.summary.json" <<'EOF_SUMMARY'
 {"passed":true,"reason_codes":[],"stages":{"discovery":{"passed":true},"review":{"passed":true}}}
 EOF_SUMMARY
 
-  PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" install-approved --manifest "$tmp/review_manifest.ai.tsv" --proof "$tmp/parallel_proof.summary.json" --content-report "$tmp/review_content.tsv" --report "$tmp/install.report.tsv" --dry-run > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
+  if PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" install-approved --manifest "$tmp/review_manifest.ai.tsv" --proof "$tmp/parallel_proof.summary.json" --dry-run > "$tmp/stdout.txt" 2> "$tmp/stderr.txt"; then
+    log "assertion failed: install-approved must fail when approved row fails structure gate"
+    return 1
+  fi
+
+  assert_contains "$tmp/stderr.txt" 'failed structure gate' || return 1
+  assert_contains "$tmp/stderr.txt" 'bad-format' || return 1
+}
+
+test_install_approved_process() {
+  local tmp
+  tmp="$(mktemp -d)"
+  setup_mock_env "$tmp"
+
+cat > "$tmp/review_manifest.ai.tsv" <<'EOF_MANIFEST'
+skill_ref	repo	skill	discovery_channels	discovery_summary	discovery_confidence	status	review_notes	approved_by	approved_at	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision
+example/repo@skill-alpha	example/repo	skill-alpha	find	alpha	0.9	approved	note	reviewer	2026-02-18T12:00:00Z	90	88	20	0.95	approve
+example/repo@skill-beta	example/repo	skill-beta	find	beta	0.7	pending	note			60	55	40	0.70	hold
+example/toolbox@skill-beta	example/toolbox	skill-beta	github	beta2	0.8	approved	note	reviewer	2026-02-18T12:03:00Z	88	80	25	0.90	approve
+EOF_MANIFEST
+
+  cat > "$tmp/parallel_proof.summary.json" <<'EOF_SUMMARY'
+{"passed":true,"reason_codes":[],"stages":{"discovery":{"passed":true},"review":{"passed":true}}}
+EOF_SUMMARY
+
+  PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" install-approved --manifest "$tmp/review_manifest.ai.tsv" --proof "$tmp/parallel_proof.summary.json" --report "$tmp/install.report.tsv" --dry-run > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
 
   assert_file_exists "$tmp/install.report.tsv" || return 1
   assert_row_count "$tmp/install.report.tsv" 2 || return 1
@@ -493,15 +504,39 @@ EOF_SUMMARY
   assert_contains "$tmp/stdout.txt" "example/toolbox" || return 1
   assert_not_contains "$tmp/stdout.txt" "pending" || return 1
 
-  (cd "$tmp" && PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" install-approved --manifest "$tmp/review_manifest.ai.tsv" --proof "$tmp/parallel_proof.summary.json" --content-report "$tmp/review_content.tsv" --report "$tmp/install.exec.report.tsv" > "$tmp/exec.stdout.txt" 2> "$tmp/exec.stderr.txt") || return 1
+  (cd "$tmp" && PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" install-approved --manifest "$tmp/review_manifest.ai.tsv" --proof "$tmp/parallel_proof.summary.json" --report "$tmp/install.exec.report.tsv" > "$tmp/exec.stdout.txt" 2> "$tmp/exec.stderr.txt") || return 1
   assert_file_exists "$tmp/install.exec.report.tsv" || return 1
   assert_file_exists "$tmp/.agents/skills/skill-alpha/SKILL.md" || return 1
   assert_file_exists "$tmp/.agents/skills/skill-beta/SKILL.md" || return 1
-  assert_file_exists "$tmp/audit.log" || return 1
-  assert_contains "$tmp/audit.log" "parallel proof summary" || return 1
 }
 
-test_audit_process() {
+test_install_approved_fails_on_runtime_install_failure_process() {
+  local tmp
+  tmp="$(mktemp -d)"
+  setup_mock_env "$tmp"
+
+cat > "$tmp/review_manifest.ai.tsv" <<'EOF_MANIFEST'
+skill_ref	repo	skill	discovery_channels	discovery_summary	discovery_confidence	status	review_notes	approved_by	approved_at	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision
+example/repo@skill-alpha	example/repo	skill-alpha	find	alpha	0.9	approved	note	reviewer	2026-02-18T12:00:00Z	90	88	20	0.95	approve
+example/repo@skill-fail-install	example/repo	skill-fail-install	find	fail	0.8	approved	note	reviewer	2026-02-18T12:01:00Z	88	84	25	0.90	approve
+EOF_MANIFEST
+
+  cat > "$tmp/parallel_proof.summary.json" <<'EOF_SUMMARY'
+{"passed":true,"reason_codes":[],"stages":{"discovery":{"passed":true},"review":{"passed":true}}}
+EOF_SUMMARY
+
+  if (cd "$tmp" && PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" install-approved --manifest "$tmp/review_manifest.ai.tsv" --proof "$tmp/parallel_proof.summary.json" --report "$tmp/install.report.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt"); then
+    log "assertion failed: install-approved must fail when any approved install fails"
+    return 1
+  fi
+
+  assert_file_exists "$tmp/install.report.tsv" || return 1
+  assert_contains "$tmp/install.report.tsv" $'\texample/repo\tskill-alpha\tinstalled\t' || return 1
+  assert_contains "$tmp/install.report.tsv" $'\texample/repo\tskill-fail-install\tfailed\t' || return 1
+  assert_contains "$tmp/stderr.txt" "one or more skill installs failed" || return 1
+}
+
+test_audit_deprecated_process() {
   local tmp
   tmp="$(mktemp -d)"
   setup_mock_env "$tmp"
@@ -510,13 +545,12 @@ test_audit_process() {
 {"passed":true,"reason_codes":[],"stages":{"discovery":{"passed":true},"review":{"passed":true}}}
 EOF_SUMMARY
 
-  PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" audit --out "$tmp/audit.log" --proof "$tmp/parallel_proof.summary.json" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
+  if PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" audit --out "$tmp/audit.log" --proof "$tmp/parallel_proof.summary.json" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt"; then
+    log "assertion failed: audit should be deprecated"
+    return 1
+  fi
 
-  assert_file_exists "$tmp/audit.log" || return 1
-  assert_contains "$tmp/audit.log" "# Audit Log" || return 1
-  assert_contains "$tmp/audit.log" "## npx skills list" || return 1
-  assert_contains "$tmp/audit.log" "All skills are up to date" || return 1
-  assert_contains "$tmp/audit.log" "parallel proof summary" || return 1
+  assert_contains "$tmp/stderr.txt" "removed in gate-only mode" || return 1
 }
 
 test_deprecated_command_process() {
@@ -577,11 +611,9 @@ example/repo@skill-alpha	example/repo	skill-alpha	find	alpha	0.9	approved	note	r
 example/repo@skill-beta	example/repo	skill-beta	find	beta	0.8	approved	note	reviewer	2026-02-18T12:01:00Z	88	84	25	0.90	approve
 EOF_MANIFEST
 
-  PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" validate-content --manifest "$run_dir/review_manifest.ai.tsv" --status approved --out "$run_dir/review_content.tsv" > "$tmp/validate.stdout.txt" 2> "$tmp/validate.stderr.txt" || return 1
-
-  PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" install-approved --manifest "$run_dir/review_manifest.ai.tsv" --proof "$run_dir/parallel_proof.summary.json" --content-report "$run_dir/review_content.tsv" --report "$run_dir/install.report.tsv" --dry-run > "$tmp/install.stdout.txt" 2> "$tmp/install.stderr.txt" || return 1
+  PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" install-approved --manifest "$run_dir/review_manifest.ai.tsv" --proof "$run_dir/parallel_proof.summary.json" --report "$run_dir/install.report.tsv" --dry-run > "$tmp/install.stdout.txt" 2> "$tmp/install.stderr.txt" || return 1
   assert_file_exists "$run_dir/install.report.tsv" || return 1
-  assert_row_count "$run_dir/install.report.tsv" 1 || return 1
+  assert_row_count "$run_dir/install.report.tsv" 2 || return 1
 }
 
 # --------------------------
@@ -593,13 +625,15 @@ run_test "process" "verify-parallel-proof success" test_verify_parallel_proof_su
 run_test "process" "verify-parallel-proof discovery skill_ref optional" test_verify_parallel_proof_discovery_skill_ref_optional_process
 run_test "process" "verify-parallel-proof coverage fail" test_verify_parallel_proof_fail_coverage_process
 run_test "process" "verify-parallel-proof stage mismatch fail" test_verify_parallel_proof_fail_stage_mismatch_process
-run_test "process" "validate-content gate" test_validate_content_gate_process
-run_test "process" "validate-content stdin-safe" test_validate_content_stdin_safe_process
+run_test "process" "verify-parallel-proof single-worker overlap fail" test_verify_parallel_proof_fail_same_worker_overlap_process
+run_test "process" "validate-content deprecated" test_validate_content_deprecated_process
 run_test "process" "install-approved requires proof" test_install_approved_requires_proof_process
 run_test "process" "install-approved proof failed" test_install_approved_fails_when_proof_failed_process
-run_test "process" "install-approved requires gate pass" test_install_approved_requires_gate_pass_process
+run_test "process" "install-approved rejects content-report option" test_install_approved_rejects_content_report_option_process
+run_test "process" "install-approved structure gate without content report" test_install_approved_structure_gate_without_content_report_process
 run_test "process" "install-approved" test_install_approved_process
-run_test "process" "audit" test_audit_process
+run_test "process" "install-approved runtime failure returns non-zero" test_install_approved_fails_on_runtime_install_failure_process
+run_test "process" "audit deprecated" test_audit_deprecated_process
 run_test "process" "deprecated run command" test_deprecated_command_process
 
 log ""
