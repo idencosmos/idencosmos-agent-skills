@@ -11,7 +11,7 @@ SOURCE_REVIEW_HEADER=$'source_id\tsource_type\turl\tchecked_at_utc\trelevance_no
 usage() {
   cat <<'USAGE'
 Usage:
-  agent_factory.sh apply-plan --project-root PATH --plan PATH [--source-review PATH] [--out-dir PATH]
+  agent_factory.sh apply-plan --project-root PATH --plan PATH --source-review PATH [--out-dir PATH]
 USAGE
 }
 
@@ -664,15 +664,13 @@ apply_plan_pipeline() {
   local project_root="$1"
   local plan="$2"
   local out_dir="$3"
-  local source_review="${4:-}"
+  local source_review="$4"
   local report_file="$out_dir/apply_report.tsv"
   local scope_file="$out_dir/scope_validation.tsv"
 
   validate_plan_schema "$plan"
-  if [[ -n "$source_review" ]]; then
-    validate_source_review_schema "$source_review"
-    validate_plan_sources_against_source_review "$plan" "$source_review"
-  fi
+  validate_source_review_schema "$source_review"
+  validate_plan_sources_against_source_review "$plan" "$source_review"
 
   mkdir -p "$out_dir"
   render_config "$project_root" "$plan" "$report_file"
@@ -680,9 +678,7 @@ apply_plan_pipeline() {
 
   log "run_dir: $out_dir"
   log "plan: $plan"
-  if [[ -n "$source_review" ]]; then
-    log "source_review: $source_review"
-  fi
+  log "source_review: $source_review"
   log "report: $report_file"
   log "scope: $scope_file"
 }
@@ -718,21 +714,13 @@ parse_apply_plan_args() {
 
   [[ -n "$project_root" ]] || die "--project-root is required"
   [[ -n "$plan" ]] || die "--plan is required"
+  [[ -n "$source_review" ]] || die "--source-review is required"
   [[ -f "$plan" ]] || die "plan file not found: $plan"
+  [[ -f "$source_review" ]] || die "source_review.tsv file not found: $source_review"
 
   project_root="$(resolve_dir "$project_root")"
   plan="$(resolve_path "$plan")"
-  if [[ -n "$source_review" ]]; then
-    [[ -f "$source_review" ]] || die "source_review.tsv file not found: $source_review"
-    source_review="$(resolve_path "$source_review")"
-  else
-    source_review="$(dirname "$plan")/source_review.tsv"
-    if [[ -f "$source_review" ]]; then
-      source_review="$(resolve_path "$source_review")"
-    else
-      source_review=""
-    fi
-  fi
+  source_review="$(resolve_path "$source_review")"
 
   if [[ -z "$out_dir" ]]; then
     out_dir="$project_root/.agents/project-agent-factory/runs/$(now_stamp)"

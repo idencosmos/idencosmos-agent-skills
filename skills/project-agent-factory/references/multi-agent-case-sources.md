@@ -26,8 +26,8 @@
   - `https://github.com/openai/codex/pull/8376` (`developer_instructions` 설정 문서화 변경 근거)
   - `https://github.com/openai/codex/releases/tag/rust-v0.79.0` (멀티 대화/에이전트 제어 기능 릴리스 노트)
 - GitHub 외 웹 사례:
-  - `https://cookbook.openai.com/examples/orchestrating_agents` (역할 분해/오케스트레이션 패턴 참고)
-  - `https://cookbook.openai.com/examples/agents_sdk/parallel_agents` (역할 분해/병렬 실행 패턴 참고)
+  - `https://developers.openai.com/cookbook/examples/orchestrating_agents` (역할 분해/오케스트레이션 패턴 참고)
+  - `https://developers.openai.com/cookbook/examples/agents_sdk/parallel_agents` (역할 분해/병렬 실행 패턴 참고)
 
 위 링크만 복사하지 말고, 현재 프로젝트 요구와 직접 연결되는 근거를 반드시 작성하세요.
 

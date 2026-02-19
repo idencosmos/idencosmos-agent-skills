@@ -21,6 +21,7 @@ description: 프로젝트에 필요한 Codex 멀티 에이전트를 설계/생�
 핵심 계약:
 - `references/codex-multi-agent-notes.md`로 공식 스펙을 먼저 확인하세요.
 - GitHub 사례 + 인터넷 사례를 최소 1개씩 수집해 `source_review.tsv`에 남기세요.
+- `apply-plan`은 `--source-review <path>`가 없으면 실패하도록 설계되어 있으니, 계획 반영 전에 반드시 근거 파일을 준비하세요.
 - `agent_plan.tsv` 각 행의 `reason`에는 프로젝트 근거와 소스 ID를 함께 적으세요.
 - 반영 단계는 항상 `apply-plan` 단일 커맨드로 실행하고 `--source-review`를 함께 전달해 근거 검증을 자동화하세요.
 - 생성/갱신 경로를 `<project-root>/.codex/` 하위로 강제하세요.
@@ -83,7 +84,7 @@ cat > "$RUN_DIR/source_review.tsv" <<TSV
 source_id	source_type	url	checked_at_utc	relevance_note	key_constraints
 official-1	official	https://developers.openai.com/codex/multi-agent	$NOW_UTC	multi_agent 활성화와 agent 설정 키 확인	experimental 기능/버전 차이 확인 필요
 github-1	github	https://github.com/openai/codex/pull/11917	$NOW_UTC	config_file 기반 역할 분리 구성 근거 확인	PR 기준이므로 현재 CLI 버전과 교차 확인 필요
-web-1	web	https://cookbook.openai.com/examples/agents_sdk/parallel_agents	$NOW_UTC	병렬 에이전트 분해 패턴을 역할 설계에 참고	Codex 설정 키는 공식 문서로 재검증
+web-1	web	https://developers.openai.com/cookbook/examples/agents_sdk/parallel_agents	$NOW_UTC	병렬 에이전트 분해 패턴을 역할 설계에 참고	Codex 설정 키는 공식 문서로 재검증
 TSV
 ```
 

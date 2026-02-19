@@ -26,13 +26,14 @@ cat > "$run_dir/source_review.tsv" <<'TSV'
 source_id	source_type	url	checked_at_utc	relevance_note	key_constraints
 official-1	official	https://developers.openai.com/codex/multi-agent	2026-02-19T00:00:00Z	multi-agent 설정 키 확인	experimental 기능 여부 확인
 github-1	github	https://github.com/openai/codex/pull/11917	2026-02-19T00:01:00Z	role alias/config_file 변경 근거	PR 기준으로 버전 차이 확인
-web-1	web	https://cookbook.openai.com/examples/agents_sdk/parallel_agents	2026-02-19T00:02:00Z	역할 분해 패턴 참고	Codex 설정 키는 공식 문서로 재검증
+web-1	web	https://developers.openai.com/cookbook/examples/agents_sdk/parallel_agents	2026-02-19T00:02:00Z	역할 분해 패턴 참고	Codex 설정 키는 공식 문서로 재검증
 TSV
+source_review_file="$run_dir/source_review.tsv"
 
 bash "$SCRIPT_PATH" apply-plan \
   --project-root "$project_root" \
   --plan "$run_dir/agent_plan.tsv" \
-  --source-review "$run_dir/source_review.tsv" \
+  --source-review "$source_review_file" \
   --out-dir "$run_dir" >/dev/null
 
 [[ -f "$project_root/.codex/config.toml" ]]
@@ -68,6 +69,7 @@ reduced_run_dir="$project_root/.agents/project-agent-factory/runs/reduced"
 bash "$SCRIPT_PATH" apply-plan \
   --project-root "$project_root" \
   --plan "$run_dir/reduced_plan.tsv" \
+  --source-review "$source_review_file" \
   --out-dir "$reduced_run_dir" >/dev/null
 
 [[ -f "$project_root/.codex/agents/paf_explorer.toml" ]]
@@ -88,6 +90,7 @@ legacy_run_dir="$project_root/.agents/project-agent-factory/runs/legacy"
 bash "$SCRIPT_PATH" apply-plan \
   --project-root "$project_root" \
   --plan "$run_dir/legacy_plan.tsv" \
+  --source-review "$source_review_file" \
   --out-dir "$legacy_run_dir" >/dev/null
 
 rg -q '^developer_instructions = """$' "$project_root/.codex/agents/paf_legacy.toml"
@@ -113,6 +116,15 @@ if bash "$SCRIPT_PATH" validate-plan >/dev/null 2>&1; then
   exit 1
 fi
 
+# apply-plan should require --source-review explicitly
+if bash "$SCRIPT_PATH" apply-plan \
+  --project-root "$project_root" \
+  --plan "$run_dir/agent_plan.tsv" \
+  --out-dir "$run_dir/missing_source_review_run" >/dev/null 2>&1; then
+  echo "error: apply-plan should require --source-review" >&2
+  exit 1
+fi
+
 # apply-plan should reject malformed headers
 cat > "$run_dir/bad_header.tsv" <<'TSV'
 agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	sandbox_mode
@@ -122,6 +134,7 @@ TSV
 if bash "$SCRIPT_PATH" apply-plan \
   --project-root "$project_root" \
   --plan "$run_dir/bad_header.tsv" \
+  --source-review "$source_review_file" \
   --out-dir "$run_dir/bad_header_run" >/dev/null 2>&1; then
   echo "error: apply-plan should reject malformed header" >&2
   exit 1
@@ -136,6 +149,7 @@ TSV
 if bash "$SCRIPT_PATH" apply-plan \
   --project-root "$project_root" \
   --plan "$run_dir/bad_empty_field.tsv" \
+  --source-review "$source_review_file" \
   --out-dir "$run_dir/bad_empty_run" >/dev/null 2>&1; then
   echo "error: apply-plan should reject empty required fields" >&2
   exit 1
@@ -150,6 +164,7 @@ TSV
 if bash "$SCRIPT_PATH" apply-plan \
   --project-root "$project_root" \
   --plan "$run_dir/bad_reason_source.tsv" \
+  --source-review "$source_review_file" \
   --out-dir "$run_dir/bad_reason_source_run" >/dev/null 2>&1; then
   echo "error: apply-plan should require source_id tokens in reason" >&2
   exit 1
@@ -164,6 +179,7 @@ TSV
 if bash "$SCRIPT_PATH" apply-plan \
   --project-root "$project_root" \
   --plan "$run_dir/bad_reason_source_link.tsv" \
+  --source-review "$source_review_file" \
   --out-dir "$run_dir/bad_reason_source_link_run" >/dev/null 2>&1; then
   echo "error: apply-plan should reject unknown source_id references against source_review.tsv" >&2
   exit 1
@@ -179,6 +195,7 @@ TSV
 if bash "$SCRIPT_PATH" apply-plan \
   --project-root "$project_root" \
   --plan "$run_dir/bad_duplicate.tsv" \
+  --source-review "$source_review_file" \
   --out-dir "$run_dir/bad_duplicate_run" >/dev/null 2>&1; then
   echo "error: apply-plan should reject duplicate agent ids" >&2
   exit 1
@@ -193,6 +210,7 @@ TSV
 if bash "$SCRIPT_PATH" apply-plan \
   --project-root "$project_root" \
   --plan "$run_dir/bad_duplicate_config.tsv" \
+  --source-review "$source_review_file" \
   --out-dir "$run_dir/bad_duplicate_config_run" >/dev/null 2>&1; then
   echo "error: apply-plan should reject duplicate config paths" >&2
   exit 1
@@ -209,6 +227,7 @@ TSV
 if bash "$SCRIPT_PATH" apply-plan \
   --project-root "$project_root" \
   --plan "$run_dir/malicious_plan.tsv" \
+  --source-review "$source_review_file" \
   --out-dir "$run_dir/malicious" >/dev/null 2>&1; then
   echo "error: apply-plan should reject traversal config_relpath" >&2
   exit 1
@@ -224,6 +243,7 @@ TSV
 if bash "$SCRIPT_PATH" apply-plan \
   --project-root "$project_root" \
   --plan "$run_dir/bad_nested_config.tsv" \
+  --source-review "$source_review_file" \
   --out-dir "$run_dir/bad_nested_run" >/dev/null 2>&1; then
   echo "error: apply-plan should reject nested config_relpath" >&2
   exit 1
@@ -234,7 +254,7 @@ cat > "$run_dir/bad_source_review.tsv" <<'TSV'
 source_id	source_type	url	checked_at_utc	relevance_note	key_constraints
 official-1	official	https://developers.openai.com/codex/multi-agent	2026-02-19T00:00:00Z	multi-agent 설정 키 확인	experimental 기능 여부 확인
 github-1	github	https://developers.openai.com/codex/config-reference	2026-02-19T00:01:00Z	github 타입 URL 검증 실패 유도	URL 도메인 규칙 위반
-web-1	web	https://cookbook.openai.com/examples/agents_sdk/parallel_agents	2026-02-19T00:02:00Z	역할 분해 패턴 참고	Codex 설정 키는 공식 문서로 재검증
+web-1	web	https://developers.openai.com/cookbook/examples/agents_sdk/parallel_agents	2026-02-19T00:02:00Z	역할 분해 패턴 참고	Codex 설정 키는 공식 문서로 재검증
 TSV
 
 if bash "$SCRIPT_PATH" apply-plan \
@@ -254,6 +274,7 @@ crlf_run_dir="$project_root/.agents/project-agent-factory/runs/crlf"
 bash "$SCRIPT_PATH" apply-plan \
   --project-root "$project_root" \
   --plan "$run_dir/crlf_plan.tsv" \
+  --source-review "$source_review_file" \
   --out-dir "$crlf_run_dir" >/dev/null
 
 rg -q 'sandbox_mode = "workspace-write"' "$project_root/.codex/agents/paf_windows.toml"
@@ -278,9 +299,17 @@ agent_id	role_name	priority	reason	config_relpath	description	developer_instruct
 paf_explorer	Project Explorer	10	keep source=official-1	agents/paf_explorer.toml	Explore project structure.	Collect evidence-backed architecture notes.	gpt-5	medium	workspace-write
 TSV
 
+cat > "$corrupt_root/source_review.tsv" <<'TSV'
+source_id	source_type	url	checked_at_utc	relevance_note	key_constraints
+official-1	official	https://developers.openai.com/codex/multi-agent	2026-02-19T00:00:00Z	multi-agent 설정 키 확인	experimental 기능 여부 확인
+github-1	github	https://github.com/openai/codex/pull/11917	2026-02-19T00:01:00Z	role alias/config_file 변경 근거	PR 기준으로 버전 차이 확인
+web-1	web	https://developers.openai.com/cookbook/examples/agents_sdk/parallel_agents	2026-02-19T00:02:00Z	역할 분해 패턴 참고	Codex 설정 키는 공식 문서로 재검증
+TSV
+
 if bash "$SCRIPT_PATH" apply-plan \
   --project-root "$corrupt_root" \
   --plan "$corrupt_root/plan.tsv" \
+  --source-review "$corrupt_root/source_review.tsv" \
   --out-dir "$corrupt_root/.agents/project-agent-factory/runs/corrupt" >/dev/null 2>&1; then
   echo "error: apply-plan should reject corrupted managed markers" >&2
   exit 1
@@ -305,10 +334,18 @@ agent_id	role_name	priority	reason	config_relpath	description	developer_instruct
 paf_explorer	Project Explorer	10	feature source=official-1	agents/paf_explorer.toml	Explore project structure.	Collect evidence-backed architecture notes.	gpt-5	minimal	workspace-write
 TSV
 
+cat > "$feature_root/source_review.tsv" <<'TSV'
+source_id	source_type	url	checked_at_utc	relevance_note	key_constraints
+official-1	official	https://developers.openai.com/codex/multi-agent	2026-02-19T00:00:00Z	multi-agent 설정 키 확인	experimental 기능 여부 확인
+github-1	github	https://github.com/openai/codex/pull/11917	2026-02-19T00:01:00Z	role alias/config_file 변경 근거	PR 기준으로 버전 차이 확인
+web-1	web	https://developers.openai.com/cookbook/examples/agents_sdk/parallel_agents	2026-02-19T00:02:00Z	역할 분해 패턴 참고	Codex 설정 키는 공식 문서로 재검증
+TSV
+
 feature_run_dir="$feature_root/.agents/project-agent-factory/runs/feature"
 bash "$SCRIPT_PATH" apply-plan \
   --project-root "$feature_root" \
   --plan "$feature_root/plan.tsv" \
+  --source-review "$feature_root/source_review.tsv" \
   --out-dir "$feature_run_dir" >/dev/null
 
 rg -q '^multi_agent = true$' "$feature_root/.codex/config.toml"
