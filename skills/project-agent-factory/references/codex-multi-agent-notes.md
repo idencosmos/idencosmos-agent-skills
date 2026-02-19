@@ -4,13 +4,14 @@
 
 ## 핵심 포인트
 
-1. 멀티 에이전트 기능은 `[features]`의 `multi_agent = true`가 필요합니다(기본값 `false`).
+1. 멀티 에이전트 기능은 실험적 기능이며, `[features]`의 `multi_agent = true`가 필요합니다(기본값 `false`). 활성화되면 `spawn_agent`, `send_input`, `wait`, `resume_agent`, `close_agent` 같은 도구를 사용할 수 있습니다.
 2. 프로젝트별 구성은 `<project-root>/.codex/config.toml`에서 관리할 수 있습니다.
-3. 에이전트는 `[agents.<name>]` 블록으로 등록하며, `description`과 `config_file` 분리 구성이 가능합니다.
+3. 에이전트는 `[agents.<name>]` 블록으로 등록하며, `description`과 `config_file` 분리 구성이 가능합니다. `config_file`는 `.codex/config.toml` 기준 상대경로여야 합니다.
 4. 기본 `agent_type`은 `default`, `explorer`, `worker`입니다.
-5. 역할별 파일(`agents/*.toml`)에서는 `model`, `model_reasoning_effort`, `sandbox_mode`, `developer_instructions`를 오버라이드할 수 있습니다.
+5. 역할별 파일(`agents/*.toml`)에서는 `model`, `model_reasoning_effort`, `sandbox_mode`, `approval_policy`, `cwd`, `prompt`, `env` 등을 설정할 수 있습니다.
 6. `model_reasoning_effort` 허용값은 `minimal|low|medium|high|xhigh`입니다.
 7. 병렬 처리 상한은 `agents.max_threads`로 조정 가능합니다.
+8. `[agents.<name>]`에는 `description`, `prompt`, `model`, `config_file` 외 임의 필드를 넣을 수 없고, 규격 외 필드는 에러가 발생합니다.
 
 ## 권장 운영 원칙
 
@@ -22,5 +23,5 @@
 ## 공식 문서
 
 - [Codex Multi-agents](https://developers.openai.com/codex/multi-agent)
-- [Codex Config Basics](https://developers.openai.com/codex/config-basics)
+- [Codex Config Basics](https://developers.openai.com/codex/config-basic)
 - [Codex Config Reference](https://developers.openai.com/codex/config-reference)

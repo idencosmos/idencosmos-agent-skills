@@ -17,7 +17,7 @@ run_dir="$project_root/.agents/project-agent-factory/runs/manual"
 mkdir -p "$run_dir"
 
 cat > "$run_dir/agent_plan.tsv" <<'TSV'
-agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
+agent_id	role_name	priority	reason	config_relpath	description	prompt	model	model_reasoning_effort	sandbox_mode
 paf_explorer	Project Explorer	10	context	agents/paf_explorer.toml	Explore project structure.	Collect evidence-backed architecture notes.	gpt-5	medium	workspace-write
 paf.implementer	Project Implementer	20	delivery	agents/paf_implementer.toml	Implement requested changes.	Apply scoped edits and run available checks.	gpt-5-codex	xhigh	danger-full-access
 TSV
@@ -42,11 +42,16 @@ rg -q '^multi_agent = true$' "$project_root/.codex/config.toml"
 rg -q 'model = "gpt-5-codex"' "$project_root/.codex/agents/paf_implementer.toml"
 rg -q 'model_reasoning_effort = "xhigh"' "$project_root/.codex/agents/paf_implementer.toml"
 rg -q 'sandbox_mode = "danger-full-access"' "$project_root/.codex/agents/paf_implementer.toml"
+rg -q '^prompt = """$' "$project_root/.codex/agents/paf_implementer.toml"
+if rg -q '^developer_instructions[[:space:]]*=' "$project_root/.codex/agents/paf_implementer.toml"; then
+  echo "error: generated agent config should use prompt key, not developer_instructions" >&2
+  exit 1
+fi
 rg -q 'Do not write outside the project root\.' "$project_root/.codex/agents/paf_implementer.toml"
 
 # stale managed configs should be removed when plan shrinks
 cat > "$run_dir/reduced_plan.tsv" <<'TSV'
-agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
+agent_id	role_name	priority	reason	config_relpath	description	prompt	model	model_reasoning_effort	sandbox_mode
 paf_explorer	Project Explorer	10	keep	agents/paf_explorer.toml	Explore project structure.	Collect evidence-backed architecture notes.	gpt-5	medium	workspace-write
 TSV
 
@@ -64,6 +69,20 @@ if rg -q '^\[agents."paf.implementer"\]$' "$project_root/.codex/config.toml"; th
   echo "error: stale implementer block should have been removed" >&2
   exit 1
 fi
+
+# legacy developer_instructions header should still be accepted
+cat > "$run_dir/legacy_plan.tsv" <<'TSV'
+agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
+paf_legacy	Legacy Agent	15	compat	agents/paf_legacy.toml	Verify legacy header compatibility.	Support old plan header.	gpt-5	low	workspace-write
+TSV
+
+legacy_run_dir="$project_root/.agents/project-agent-factory/runs/legacy"
+bash "$SCRIPT_PATH" apply-plan \
+  --project-root "$project_root" \
+  --plan "$run_dir/legacy_plan.tsv" \
+  --out-dir "$legacy_run_dir" >/dev/null
+
+rg -q '^prompt = """$' "$project_root/.codex/agents/paf_legacy.toml"
 
 # public CLI should stay minimal
 if bash "$SCRIPT_PATH" render-config >/dev/null 2>&1; then

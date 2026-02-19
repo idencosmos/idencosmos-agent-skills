@@ -3,7 +3,9 @@ set -euo pipefail
 
 BEGIN_MARKER="# BEGIN project-agent-factory managed agents"
 END_MARKER="# END project-agent-factory managed agents"
-PLAN_HEADER=$'agent_id\trole_name\tpriority\treason\tconfig_relpath\tdescription\tdeveloper_instructions\tmodel\tmodel_reasoning_effort\tsandbox_mode'
+PLAN_HEADER_PROMPT=$'agent_id\trole_name\tpriority\treason\tconfig_relpath\tdescription\tprompt\tmodel\tmodel_reasoning_effort\tsandbox_mode'
+PLAN_HEADER_LEGACY=$'agent_id\trole_name\tpriority\treason\tconfig_relpath\tdescription\tdeveloper_instructions\tmodel\tmodel_reasoning_effort\tsandbox_mode'
+PLAN_PROMPT_COLUMN="prompt"
 
 usage() {
   cat <<'USAGE'
@@ -137,7 +139,7 @@ validate_plan_schema() {
   local reason
   local config_relpath
   local description
-  local developer_instructions
+  local prompt_text
   local model
   local model_reasoning_effort
   local sandbox_mode
@@ -147,9 +149,15 @@ validate_plan_schema() {
 
   [[ -f "$plan" ]] || die "plan file not found: $plan"
   header="$(head -n 1 "$plan" | tr -d '\r')"
-  [[ "$header" == "$PLAN_HEADER" ]] || die "invalid plan header. expected: $PLAN_HEADER"
+  if [[ "$header" == "$PLAN_HEADER_PROMPT" ]]; then
+    PLAN_PROMPT_COLUMN="prompt"
+  elif [[ "$header" == "$PLAN_HEADER_LEGACY" ]]; then
+    PLAN_PROMPT_COLUMN="developer_instructions"
+  else
+    die "invalid plan header. expected: $PLAN_HEADER_PROMPT (preferred) or $PLAN_HEADER_LEGACY (legacy)"
+  fi
 
-  while IFS=$'\t' read -r agent_id role_name priority reason config_relpath description developer_instructions model model_reasoning_effort sandbox_mode rest; do
+  while IFS=$'\t' read -r agent_id role_name priority reason config_relpath description prompt_text model model_reasoning_effort sandbox_mode rest; do
     line_no=$((line_no + 1))
     if [[ "$agent_id" == "agent_id" ]]; then
       continue
@@ -168,7 +176,7 @@ validate_plan_schema() {
     [[ -n "$reason" ]] || die "plan row $line_no: reason is required"
     validate_agent_config_relpath "$config_relpath" >/dev/null
     [[ -n "$description" ]] || die "plan row $line_no: description is required"
-    [[ -n "$developer_instructions" ]] || die "plan row $line_no: developer_instructions is required"
+    [[ -n "$prompt_text" ]] || die "plan row $line_no: ${PLAN_PROMPT_COLUMN} is required"
     [[ -n "$model" ]] || die "plan row $line_no: model is required"
     case "$model_reasoning_effort" in
       minimal|low|medium|high|xhigh) ;;
@@ -229,13 +237,13 @@ append_scope_row() {
 build_agent_file() {
   local out="$1"
   local role_name="$2"
-  local developer_instructions="$3"
+  local prompt_text="$3"
   local model="$4"
   local model_reasoning_effort="$5"
   local sandbox_mode="$6"
-  local escaped_instructions
+  local escaped_prompt
 
-  escaped_instructions="$(toml_escape_multiline_string "$developer_instructions")"
+  escaped_prompt="$(toml_escape_multiline_string "$prompt_text")"
 
   cat > "$out" <<EOF_AGENT
 # managed_by=project-agent-factory
@@ -244,8 +252,8 @@ model = "$(toml_escape_basic_string "$model")"
 model_reasoning_effort = "$(toml_escape_basic_string "$model_reasoning_effort")"
 sandbox_mode = "$(toml_escape_basic_string "$sandbox_mode")"
 
-developer_instructions = """
-${escaped_instructions}
+prompt = """
+${escaped_prompt}
 Do not write outside the project root.
 """
 EOF_AGENT
@@ -263,7 +271,7 @@ build_managed_block() {
     printf '%s\n' "$BEGIN_MARKER"
     printf '# generated_at=%s\n' "$generated_at"
     printf '# This block is managed by project-agent-factory.\n'
-    while IFS=$'\t' read -r agent_id _role_name _priority _reason config_relpath description _developer_instructions _model _model_reasoning_effort _sandbox_mode _rest; do
+    while IFS=$'\t' read -r agent_id _role_name _priority _reason config_relpath description _prompt _model _model_reasoning_effort _sandbox_mode _rest; do
       if [[ "$agent_id" == "agent_id" ]]; then
         continue
       fi
@@ -442,7 +450,7 @@ render_config() {
   planned_agent_files="$(mktemp)"
   : > "$planned_agent_files"
 
-  while IFS=$'\t' read -r agent_id role_name _priority _reason config_relpath _description developer_instructions model model_reasoning_effort sandbox_mode _rest; do
+  while IFS=$'\t' read -r agent_id role_name _priority _reason config_relpath _description prompt_text model model_reasoning_effort sandbox_mode _rest; do
     if [[ "$agent_id" == "agent_id" ]]; then
       continue
     fi
@@ -461,7 +469,7 @@ render_config() {
     build_agent_file \
       "$agent_file" \
       "$role_name" \
-      "$developer_instructions" \
+      "$prompt_text" \
       "$model" \
       "$model_reasoning_effort" \
       "$sandbox_mode"
