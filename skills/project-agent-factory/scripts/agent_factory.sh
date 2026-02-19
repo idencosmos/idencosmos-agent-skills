@@ -8,11 +8,7 @@ PLAN_HEADER=$'agent_id\trole_name\tpriority\treason\tconfig_relpath\tdescription
 usage() {
   cat <<'USAGE'
 Usage:
-  agent_factory.sh apply-plan --project-root PATH --plan PATH [--profile PATH] [--out-dir PATH]
-  agent_factory.sh render-config --project-root PATH --plan PATH --report PATH
-  agent_factory.sh validate-plan --plan PATH
-  agent_factory.sh validate-scope --project-root PATH --report PATH --out PATH
-  agent_factory.sh audit --profile PATH --plan PATH --report PATH --out PATH
+  agent_factory.sh apply-plan --project-root PATH --plan PATH [--out-dir PATH]
 USAGE
 }
 
@@ -230,25 +226,6 @@ append_scope_row() {
     "$(sanitize_field "$note")" >> "$out"
 }
 
-write_audit_header() {
-  local out="$1"
-  ensure_parent_dir "$out"
-  printf 'metric\tvalue\n' > "$out"
-}
-
-append_audit_value() {
-  local out="$1"
-  local metric="$2"
-  local value="$3"
-  printf '%s\t%s\n' "$(sanitize_field "$metric")" "$(sanitize_field "$value")" >> "$out"
-}
-
-profile_value() {
-  local file="$1"
-  local key="$2"
-  awk -F'\t' -v k="$key" 'NR>1 && $1==k {print $2; found=1; exit} END {if (!found) print ""}' "$file"
-}
-
 build_agent_file() {
   local out="$1"
   local role_name="$2"
@@ -382,8 +359,6 @@ render_config() {
   local planned_agent_files
   local existing_agent_file
 
-  validate_plan_schema "$plan"
-
   mkdir -p "$agents_dir"
   write_apply_report_header "$report"
   append_apply_report "$report" "mkdir" "$codex_dir" "ok" "ensure .codex exists"
@@ -395,6 +370,7 @@ render_config() {
     if [[ "$agent_id" == "agent_id" ]]; then
       continue
     fi
+    sandbox_mode="${sandbox_mode%$'\r'}"
     safe_config_relpath="$(validate_agent_config_relpath "$config_relpath")"
     agent_file="$(resolve_project_child_path "$project_root" ".codex/$safe_config_relpath")"
     printf '%s\n' "$agent_file" >> "$planned_agent_files"
@@ -467,94 +443,28 @@ validate_scope() {
   fi
 }
 
-run_audit() {
-  local profile="$1"
-  local plan="$2"
-  local report="$3"
-  local out="$4"
-  local plan_count
-  local write_count
-  local managed_paths
-
-  validate_plan_schema "$plan"
-
-  plan_count="$(awk 'NR>1 {count++} END {print count+0}' "$plan")"
-  write_count="$(awk -F'\t' 'NR>1 && $2 ~ /^write_/ {count++} END {print count+0}' "$report")"
-  managed_paths="$(awk -F'\t' 'NR>1 {print $3}' "$report" | sort -u | tr '\n' ',' | sed 's/,$//')"
-
-  write_audit_header "$out"
-  append_audit_value "$out" "generated_at" "$(now_utc)"
-  append_audit_value "$out" "project_root" "$(profile_value "$profile" "project_root")"
-  append_audit_value "$out" "frontend_signal" "$(profile_value "$profile" "frontend_signal")"
-  append_audit_value "$out" "backend_signal" "$(profile_value "$profile" "backend_signal")"
-  append_audit_value "$out" "ops_signal" "$(profile_value "$profile" "ops_signal")"
-  append_audit_value "$out" "test_signal" "$(profile_value "$profile" "test_signal")"
-  append_audit_value "$out" "file_count_code_total" "$(profile_value "$profile" "file_count_code_total")"
-  append_audit_value "$out" "planned_agents" "$plan_count"
-  append_audit_value "$out" "write_operations" "$write_count"
-  append_audit_value "$out" "managed_paths" "${managed_paths:-none}"
-}
-
-write_profile_header() {
-  local out="$1"
-  ensure_parent_dir "$out"
-  printf 'key\tvalue\n' > "$out"
-}
-
-append_profile_value() {
-  local out="$1"
-  local key="$2"
-  local value="$3"
-  printf '%s\t%s\n' "$(sanitize_field "$key")" "$(sanitize_field "$value")" >> "$out"
-}
-
-generate_profile_stub() {
-  local out="$1"
-  local project_root="$2"
-  write_profile_header "$out"
-  append_profile_value "$out" "project_root" "$project_root"
-  append_profile_value "$out" "generated_at" "$(now_utc)"
-  append_profile_value "$out" "frontend_signal" "unknown"
-  append_profile_value "$out" "backend_signal" "unknown"
-  append_profile_value "$out" "ops_signal" "unknown"
-  append_profile_value "$out" "test_signal" "unknown"
-  append_profile_value "$out" "file_count_code_total" "unknown"
-}
-
 apply_plan_pipeline() {
   local project_root="$1"
   local plan="$2"
-  local profile="${3:-}"
-  local out_dir="$4"
-  local profile_file="$out_dir/project_profile.tsv"
+  local out_dir="$3"
   local report_file="$out_dir/apply_report.tsv"
   local scope_file="$out_dir/scope_validation.tsv"
-  local audit_file="$out_dir/audit.tsv"
 
   validate_plan_schema "$plan"
 
   mkdir -p "$out_dir"
   render_config "$project_root" "$plan" "$report_file"
   validate_scope "$project_root" "$report_file" "$scope_file"
-  if [[ -n "$profile" ]]; then
-    run_audit "$profile" "$plan" "$report_file" "$audit_file"
-  else
-    generate_profile_stub "$profile_file" "$project_root"
-    run_audit "$profile_file" "$plan" "$report_file" "$audit_file"
-  fi
 
   log "run_dir: $out_dir"
-  log "profile: ${profile:-$profile_file}"
   log "plan: $plan"
   log "report: $report_file"
   log "scope: $scope_file"
-  log "audit: $audit_file"
 }
 
 parse_apply_plan_args() {
   local project_root=""
   local plan=""
-  local profile=""
   local out_dir=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -564,10 +474,6 @@ parse_apply_plan_args() {
         ;;
       --plan)
         plan="$2"
-        shift 2
-        ;;
-      --profile)
-        profile="$2"
         shift 2
         ;;
       --out-dir)
@@ -586,7 +492,6 @@ parse_apply_plan_args() {
 
   project_root="$(resolve_dir "$project_root")"
   plan="$(resolve_path "$plan")"
-  validate_plan_schema "$plan"
 
   if [[ -z "$out_dir" ]]; then
     out_dir="$project_root/.agents/project-agent-factory/runs/$(now_stamp)"
@@ -594,149 +499,7 @@ parse_apply_plan_args() {
   out_dir="$(resolve_path "$out_dir")"
   is_within_project "$project_root" "$out_dir" || die "--out-dir must be within project root"
 
-  if [[ -n "$profile" ]]; then
-    [[ -f "$profile" ]] || die "profile file not found: $profile"
-    profile="$(resolve_path "$profile")"
-  fi
-
-  apply_plan_pipeline "$project_root" "$plan" "$profile" "$out_dir"
-}
-
-parse_render_args() {
-  local project_root=""
-  local plan=""
-  local report=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --project-root)
-        project_root="$2"
-        shift 2
-        ;;
-      --plan)
-        plan="$2"
-        shift 2
-        ;;
-      --report)
-        report="$2"
-        shift 2
-        ;;
-      *)
-        die "unknown option for render-config: $1"
-        ;;
-    esac
-  done
-  [[ -n "$project_root" ]] || die "--project-root is required"
-  [[ -n "$plan" ]] || die "--plan is required"
-  [[ -n "$report" ]] || die "--report is required"
-  [[ -f "$plan" ]] || die "plan file not found: $plan"
-  project_root="$(resolve_dir "$project_root")"
-  plan="$(resolve_path "$plan")"
-  report="$(resolve_path "$report")"
-  is_within_project "$project_root" "$report" || die "--report must be within project root"
-  validate_plan_schema "$plan"
-  render_config "$project_root" "$plan" "$report"
-  log "report: $report"
-}
-
-parse_validate_plan_args() {
-  local plan=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --plan)
-        plan="$2"
-        shift 2
-        ;;
-      *)
-        die "unknown option for validate-plan: $1"
-        ;;
-    esac
-  done
-  [[ -n "$plan" ]] || die "--plan is required"
-  [[ -f "$plan" ]] || die "plan file not found: $plan"
-  plan="$(resolve_path "$plan")"
-  validate_plan_schema "$plan"
-  log "plan_validation: ok"
-}
-
-parse_validate_args() {
-  local project_root=""
-  local report=""
-  local out=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --project-root)
-        project_root="$2"
-        shift 2
-        ;;
-      --report)
-        report="$2"
-        shift 2
-        ;;
-      --out)
-        out="$2"
-        shift 2
-        ;;
-      *)
-        die "unknown option for validate-scope: $1"
-        ;;
-    esac
-  done
-  [[ -n "$project_root" ]] || die "--project-root is required"
-  [[ -n "$report" ]] || die "--report is required"
-  [[ -n "$out" ]] || die "--out is required"
-  [[ -f "$report" ]] || die "report file not found: $report"
-  project_root="$(resolve_dir "$project_root")"
-  report="$(resolve_path "$report")"
-  out="$(resolve_path "$out")"
-  is_within_project "$project_root" "$report" || die "--report must be within project root"
-  is_within_project "$project_root" "$out" || die "--out must be within project root"
-  validate_scope "$project_root" "$report" "$out"
-  log "scope_validation: $out"
-}
-
-parse_audit_args() {
-  local profile=""
-  local plan=""
-  local report=""
-  local out=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --profile)
-        profile="$2"
-        shift 2
-        ;;
-      --plan)
-        plan="$2"
-        shift 2
-        ;;
-      --report)
-        report="$2"
-        shift 2
-        ;;
-      --out)
-        out="$2"
-        shift 2
-        ;;
-      *)
-        die "unknown option for audit: $1"
-        ;;
-    esac
-  done
-  [[ -n "$profile" ]] || die "--profile is required"
-  [[ -n "$plan" ]] || die "--plan is required"
-  [[ -n "$report" ]] || die "--report is required"
-  [[ -n "$out" ]] || die "--out is required"
-  [[ -f "$profile" ]] || die "profile file not found: $profile"
-  [[ -f "$plan" ]] || die "plan file not found: $plan"
-  [[ -f "$report" ]] || die "report file not found: $report"
-
-  profile="$(resolve_path "$profile")"
-  plan="$(resolve_path "$plan")"
-  report="$(resolve_path "$report")"
-  out="$(resolve_path "$out")"
-  validate_plan_schema "$plan"
-  run_audit "$profile" "$plan" "$report" "$out"
-  log "audit: $out"
+  apply_plan_pipeline "$project_root" "$plan" "$out_dir"
 }
 
 main() {
@@ -755,10 +518,6 @@ main() {
 
   case "$command" in
     apply-plan) parse_apply_plan_args "$@" ;;
-    render-config) parse_render_args "$@" ;;
-    validate-plan) parse_validate_plan_args "$@" ;;
-    validate-scope) parse_validate_args "$@" ;;
-    audit) parse_audit_args "$@" ;;
     -h|--help|help)
       usage
       ;;

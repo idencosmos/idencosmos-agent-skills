@@ -1,18 +1,19 @@
 ---
 name: project-agent-factory
-description: AI가 생성한 agent_plan.tsv를 검증하고, 프로젝트 내부 .codex/config.toml 및 .codex/agents/*.toml에 안전하게 적용/검증/감사합니다. 멀티 에이전트 계획을 이미 갖고 있거나 LLM이 역할/지침/모델을 설계한 뒤 파일 반영 단계가 필요할 때 사용합니다.
+description: AI가 생성한 agent_plan.tsv를 검증하고, 프로젝트 내부 .codex/config.toml 및 .codex/agents/*.toml에 안전하게 적용/검증합니다. 멀티 에이전트 계획을 이미 갖고 있거나 LLM이 역할/지침/모델을 설계한 뒤 파일 반영 단계가 필요할 때 사용합니다.
 ---
 
 # Project Agent Factory
 
-`project-agent-factory`는 **AI가 만든 계획을 안전하게 적용하는 엔진**입니다.
-역할 선정, 설명문 작성, 지시문 생성은 스크립트가 아니라 AI가 담당합니다.
+`project-agent-factory`를 사용해 **AI가 만든 계획을 안전하게 적용하세요**.
+역할 선정, 설명문 작성, 지시문 생성은 AI가 담당하게 두고, 이 스킬은 적용/검증 단계에만 사용하세요.
 
-핵심 가드레일:
+핵심 가드레일을 유지하세요:
 - 생성/갱신 경로를 `<project-root>/.codex/` 하위로 강제
 - 실행 산출물을 `<project-root>/.agents/project-agent-factory/runs/<timestamp>/`에 기록
 - 기존 `.codex/config.toml` 전체를 덮어쓰지 않고 관리 블록만 갱신
 - `agent_plan.tsv` 스키마를 엄격 검증(필수 컬럼/빈 값/중복/허용값)
+- 공개 CLI 표면을 최소화(`apply-plan` 단일 진입점)하여 우회 실행 경로를 축소
 
 ## Quick Start
 
@@ -29,14 +30,13 @@ paf_explorer	Project Explorer	10	context mapping	agents/paf_explorer.toml	Explor
 paf_implementer	Project Implementer	20	delivery	agents/paf_implementer.toml	Implement scoped changes with verification.	Apply requested edits and run available checks.	gpt-5	medium	workspace-write
 TSV
 
-# 2) 계획 검증(선택 권장)
-bash "$PAF_SCRIPT" validate-plan --plan "$RUN_DIR/agent_plan.tsv"
-
-# 3) 계획 적용 + 스코프 검증 + 감사
+# 2) 계획 적용 + 스코프 검증(+스키마 자동 검증)
 bash "$PAF_SCRIPT" apply-plan \
   --project-root "$(pwd)" \
   --plan "$RUN_DIR/agent_plan.tsv" \
   --out-dir "$RUN_DIR"
+
+# 3) AI가 실행 결과를 요약/감사하도록 위 산출물(`apply_report.tsv`, `scope_validation.tsv`)을 읽어 해석
 ```
 
 ## Commands
@@ -50,41 +50,8 @@ bash "$PAF_SCRIPT" apply-plan \
   --out-dir <run-dir>
 ```
 
-내부적으로 `render-config` + `validate-scope` + `audit`를 순서대로 실행합니다.
-
-### render-config
-
-```bash
-bash "$PAF_SCRIPT" render-config \
-  --project-root "$(pwd)" \
-  --plan <agent_plan.tsv> \
-  --report <apply_report.tsv>
-```
-
-### validate-plan
-
-```bash
-bash "$PAF_SCRIPT" validate-plan --plan <agent_plan.tsv>
-```
-
-### validate-scope
-
-```bash
-bash "$PAF_SCRIPT" validate-scope \
-  --project-root "$(pwd)" \
-  --report <apply_report.tsv> \
-  --out <scope_validation.tsv>
-```
-
-### audit
-
-```bash
-bash "$PAF_SCRIPT" audit \
-  --profile <project_profile.tsv> \
-  --plan <agent_plan.tsv> \
-  --report <apply_report.tsv> \
-  --out <audit.tsv>
-```
+`<run-dir>`는 프로젝트 루트 하위 경로만 허용됩니다.
+내부적으로 `validate-plan-schema` + `render-config` + `validate-scope`를 순서대로 자동 실행합니다.
 
 ## Plan Contract (Required Header)
 
@@ -103,15 +70,15 @@ agent_id	role_name	priority	reason	config_relpath	description	developer_instruct
 
 - `apply_report.tsv`: 실제 파일 생성/갱신/정리 결과
 - `scope_validation.tsv`: 프로젝트 경로 제한 검증 결과
-- `audit.tsv`: 실행 요약
-- `project_profile.tsv`: `apply-plan`에서 `--profile` 미지정 시 `unknown` 값 기반 스텁 생성
+- 위 두 파일을 근거로 AI 요약/감사 텍스트를 생성하세요.
 
 ## Migration Note
 
-레거시 `run`, `scan-project`, `plan-agents`는 제거되었습니다.
-이 스킬은 이제 AI 계획을 받아 안전 적용하는 단계만 담당합니다.
+레거시 `run`, `scan-project`, `plan-agents`를 사용하지 마세요.
+`validate-plan`, `render-config`, `validate-scope`, `audit` 공개 커맨드를 사용하지 마세요.
+AI 계획을 받아 안전 적용하는 단계에만 집중하세요.
 
 ## References
 
-- 멀티 에이전트 설정 근거 및 필드 요약: `references/codex-multi-agent-notes.md`
-- 역할 설계 참고 패턴: `references/agent-role-patterns.md`
+- 멀티 에이전트 필드 정의를 확인할 때 `references/codex-multi-agent-notes.md`를 읽으세요.
+- 역할 우선순위/구성을 설계할 때 `references/agent-role-patterns.md`를 읽으세요.
