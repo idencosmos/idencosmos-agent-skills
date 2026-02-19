@@ -5,7 +5,11 @@ description: 프로젝트에 필요한 Codex 멀티 에이전트를 설계/생�
 
 # Project Agent Factory
 
-`project-agent-factory`로 멀티 에이전트 구성을 **분석부터 반영까지** 처리하세요.
+`project-agent-factory`로 프로젝트에 필요한 멀티 에이전트를 **분석 → 설계 → 반영** 순서로 처리하세요.
+
+책임 경계를 분리하세요:
+- 계획 생성 단계(분석/소스 검증/`agent_plan.tsv` 작성)는 AI 워크플로로 수행합니다.
+- 반영 단계(`.codex/config.toml`, `.codex/agents/*.toml` 쓰기/정리/검증)는 `apply-plan` 스크립트로 수행합니다.
 
 고정 파이프라인:
 1. 프로젝트 분석 (`project_profile.md`)
@@ -71,13 +75,16 @@ mkdir -p "$RUN_DIR"
 ## Step 2) 공식 문서 + GitHub/인터넷 사례 검증
 
 먼저 `references/codex-multi-agent-notes.md`와 `references/multi-agent-case-sources.md`를 읽으세요.
-그리고 아래 형식으로 소스 검증 기록을 남기세요.
+그리고 `source_review.tsv`를 생성하세요.
 
-```tsv
+```bash
+NOW_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+cat > "$RUN_DIR/source_review.tsv" <<TSV
 source_id	source_type	url	checked_at_utc	relevance_note	key_constraints
-official-1	official	https://developers.openai.com/codex/multi-agent	2026-02-19T00:00:00Z	multi_agent 활성화, roles 스키마 확인	experimental, feature flag 필요
-github-1	github	https://github.com/openai/codex/blob/main/docs/advanced.md#sub-tasks-with-the-agent-tool	2026-02-19T00:00:00Z	에이전트 도구로 하위 작업을 분리/병합하는 실제 사용 패턴 참고	experimental 기능 플래그와 스코프 관리 필요
-web-1	web	https://cookbook.openai.com/examples/orchestrating_agents	2026-02-19T00:00:00Z	GitHub 외 공개 자료에서 오케스트레이터-워커 분해 패턴 검증	일반 오케스트레이션 예시이므로 Codex 설정 키는 공식 문서로 재검증
+official-1	official	https://developers.openai.com/codex/multi-agent	$NOW_UTC	multi_agent 활성화와 agent 설정 키 확인	experimental 기능/버전 차이 확인 필요
+github-1	github	https://github.com/openai/codex/pull/8783	$NOW_UTC	agent control 명령 기반 오케스트레이션 구현 사례 확인	experimental 플래그와 권한/스코프 관리 필요
+web-1	web	https://cookbook.openai.com/examples/agents_sdk/parallel_agents	$NOW_UTC	병렬 에이전트 분해 패턴을 역할 설계에 참고	샘플 코드 참고용(일부 레거시/비프로덕션 경고)이며 Codex 설정 키는 공식 문서로 재검증
+TSV
 ```
 
 `source_type=official|github|web` 3종류를 모두 포함하세요.
@@ -90,7 +97,7 @@ web-1	web	https://cookbook.openai.com/examples/orchestrating_agents	2026-02-19T0
 필수 헤더:
 
 ```tsv
-agent_id	role_name	priority	reason	config_relpath	description	prompt	model	model_reasoning_effort	sandbox_mode
+agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
 ```
 
 필수 규칙:
@@ -107,15 +114,30 @@ agent_id	role_name	priority	reason	config_relpath	description	prompt	model	model
 - `agent_id`에 `.`이 포함돼도 `.codex/config.toml`에는 `[agents."<agent_id>"]`로 안전하게 기록되어 TOML 중첩 테이블 충돌을 피합니다.
 - `reason`에는 `project_profile.md` 근거 + `source_review.tsv`의 `source_id`(`official-<n>|github-<n>|web-<n>`)를 포함하세요. `apply-plan`에서 형식을 검증합니다.
 
+반영 전에 `source_review.tsv` 최소 기준을 점검하세요.
+
+```bash
+awk -F'\t' '
+NR == 1 { next }
+{ seen[$2] = 1 }
+END {
+  if (!seen["official"] || !seen["github"] || !seen["web"]) {
+    print "error: source_review.tsv must include official/github/web rows" > "/dev/stderr"
+    exit 1
+  }
+}
+' "$RUN_DIR/source_review.tsv"
+```
+
 샘플:
 
 ```tsv
-agent_id	role_name	priority	reason	config_relpath	description	prompt	model	model_reasoning_effort	sandbox_mode
+agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
 paf_explorer	Project Explorer	10	stack-map(package+tests), source=official-1 web-1	agents/paf_explorer.toml	Explore repo structure and constraints.	Map architecture with evidence-first notes.	gpt-5	medium	workspace-write
 paf_implementer	Project Implementer	20	delivery-path(api+ui), source=github-1 official-1	agents/paf_implementer.toml	Implement scoped changes with verification.	Apply requested edits and run available checks.	gpt-5	high	workspace-write
 ```
 
-레거시 `developer_instructions` 헤더도 하위 호환으로 허용되지만, 신규 계획은 `prompt` 헤더를 사용하세요.
+레거시 `prompt` 헤더도 하위 호환으로 허용되지만, 신규 계획은 `developer_instructions` 헤더를 사용하세요.
 
 ## Step 4) 계획 반영 (`apply-plan`)
 
@@ -133,7 +155,30 @@ bash "$PAF_SCRIPT" apply-plan \
 
 - `apply_report.tsv`: 실제 파일 생성/갱신/정리 결과(`enable_multi_agent_feature` 포함)
 - `scope_validation.tsv`: 프로젝트 경로 제한 검증 결과
-- 위 두 파일을 근거로 결과를 요약하고, 부분 검증 항목을 분리해 보고하세요.
+- 아래 템플릿으로 결과를 보고하고, 부분 검증 항목을 분리하세요.
+
+```markdown
+# Multi-Agent Factory Audit
+generated_at_utc: <YYYY-MM-DDTHH:MM:SSZ>
+run_dir: <path>
+
+## 1) Project Analysis Summary
+- stack/runtime/test 신호 요약
+
+## 2) Source Verification Summary
+- official/github/web 각 1개 이상 여부
+- blocked 항목 여부
+
+## 3) Planned Agents
+- agent_id, priority, reason(source_id 포함) 요약
+
+## 4) Apply Results
+- apply_report.tsv 주요 변경
+- scope_validation.tsv 실패 여부
+
+## 5) Open Risks
+- 네트워크 차단, 미검증 테스트, 버전 호환성 등
+```
 
 ## Commands
 

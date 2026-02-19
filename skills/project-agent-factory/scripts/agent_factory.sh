@@ -3,9 +3,9 @@ set -euo pipefail
 
 BEGIN_MARKER="# BEGIN project-agent-factory managed agents"
 END_MARKER="# END project-agent-factory managed agents"
-PLAN_HEADER_PROMPT=$'agent_id\trole_name\tpriority\treason\tconfig_relpath\tdescription\tprompt\tmodel\tmodel_reasoning_effort\tsandbox_mode'
-PLAN_HEADER_LEGACY=$'agent_id\trole_name\tpriority\treason\tconfig_relpath\tdescription\tdeveloper_instructions\tmodel\tmodel_reasoning_effort\tsandbox_mode'
-PLAN_PROMPT_COLUMN="prompt"
+PLAN_HEADER_CURRENT=$'agent_id\trole_name\tpriority\treason\tconfig_relpath\tdescription\tdeveloper_instructions\tmodel\tmodel_reasoning_effort\tsandbox_mode'
+PLAN_HEADER_LEGACY=$'agent_id\trole_name\tpriority\treason\tconfig_relpath\tdescription\tprompt\tmodel\tmodel_reasoning_effort\tsandbox_mode'
+PLAN_INSTRUCTIONS_COLUMN="developer_instructions"
 
 usage() {
   cat <<'USAGE'
@@ -149,12 +149,12 @@ validate_plan_schema() {
 
   [[ -f "$plan" ]] || die "plan file not found: $plan"
   header="$(head -n 1 "$plan" | tr -d '\r')"
-  if [[ "$header" == "$PLAN_HEADER_PROMPT" ]]; then
-    PLAN_PROMPT_COLUMN="prompt"
+  if [[ "$header" == "$PLAN_HEADER_CURRENT" ]]; then
+    PLAN_INSTRUCTIONS_COLUMN="developer_instructions"
   elif [[ "$header" == "$PLAN_HEADER_LEGACY" ]]; then
-    PLAN_PROMPT_COLUMN="developer_instructions"
+    PLAN_INSTRUCTIONS_COLUMN="prompt"
   else
-    die "invalid plan header. expected: $PLAN_HEADER_PROMPT (preferred) or $PLAN_HEADER_LEGACY (legacy)"
+    die "invalid plan header. expected: $PLAN_HEADER_CURRENT (preferred) or $PLAN_HEADER_LEGACY (legacy)"
   fi
 
   while IFS=$'\t' read -r agent_id role_name priority reason config_relpath description prompt_text model model_reasoning_effort sandbox_mode rest; do
@@ -177,7 +177,7 @@ validate_plan_schema() {
     [[ "$reason" =~ (official|github|web)-[0-9]+ ]] || die "plan row $line_no: reason must include at least one source_id token (official-<n>|github-<n>|web-<n>)"
     validate_agent_config_relpath "$config_relpath" >/dev/null
     [[ -n "$description" ]] || die "plan row $line_no: description is required"
-    [[ -n "$prompt_text" ]] || die "plan row $line_no: ${PLAN_PROMPT_COLUMN} is required"
+    [[ -n "$prompt_text" ]] || die "plan row $line_no: ${PLAN_INSTRUCTIONS_COLUMN} is required"
     [[ -n "$model" ]] || die "plan row $line_no: model is required"
     case "$model_reasoning_effort" in
       minimal|low|medium|high|xhigh) ;;
@@ -241,13 +241,13 @@ append_scope_row() {
 build_agent_file() {
   local out="$1"
   local role_name="$2"
-  local prompt_text="$3"
+  local instructions_text="$3"
   local model="$4"
   local model_reasoning_effort="$5"
   local sandbox_mode="$6"
-  local escaped_prompt
+  local escaped_instructions
 
-  escaped_prompt="$(toml_escape_multiline_string "$prompt_text")"
+  escaped_instructions="$(toml_escape_multiline_string "$instructions_text")"
 
   cat > "$out" <<EOF_AGENT
 # managed_by=project-agent-factory
@@ -256,8 +256,8 @@ model = "$(toml_escape_basic_string "$model")"
 model_reasoning_effort = "$(toml_escape_basic_string "$model_reasoning_effort")"
 sandbox_mode = "$(toml_escape_basic_string "$sandbox_mode")"
 
-prompt = """
-${escaped_prompt}
+developer_instructions = """
+${escaped_instructions}
 Do not write outside the project root.
 """
 EOF_AGENT

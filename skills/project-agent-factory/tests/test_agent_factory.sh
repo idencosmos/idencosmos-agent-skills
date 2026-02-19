@@ -17,7 +17,7 @@ run_dir="$project_root/.agents/project-agent-factory/runs/manual"
 mkdir -p "$run_dir"
 
 cat > "$run_dir/agent_plan.tsv" <<'TSV'
-agent_id	role_name	priority	reason	config_relpath	description	prompt	model	model_reasoning_effort	sandbox_mode
+agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
 paf_explorer	Project Explorer	10	stack-map source=official-1	agents/paf_explorer.toml	Explore project structure.	Collect evidence-backed architecture notes.	gpt-5	medium	workspace-write
 paf.implementer	Project Implementer	20	delivery source=github-1	agents/paf_implementer.toml	Implement requested changes.	Apply scoped edits and run available checks.	gpt-5-codex	xhigh	danger-full-access
 TSV
@@ -42,9 +42,9 @@ rg -q '^multi_agent = true$' "$project_root/.codex/config.toml"
 rg -q 'model = "gpt-5-codex"' "$project_root/.codex/agents/paf_implementer.toml"
 rg -q 'model_reasoning_effort = "xhigh"' "$project_root/.codex/agents/paf_implementer.toml"
 rg -q 'sandbox_mode = "danger-full-access"' "$project_root/.codex/agents/paf_implementer.toml"
-rg -q '^prompt = """$' "$project_root/.codex/agents/paf_implementer.toml"
-if rg -q '^developer_instructions[[:space:]]*=' "$project_root/.codex/agents/paf_implementer.toml"; then
-  echo "error: generated agent config should use prompt key, not developer_instructions" >&2
+rg -q '^developer_instructions = """$' "$project_root/.codex/agents/paf_implementer.toml"
+if rg -q '^prompt[[:space:]]*=' "$project_root/.codex/agents/paf_implementer.toml"; then
+  echo "error: generated agent config should use developer_instructions key, not prompt" >&2
   exit 1
 fi
 rg -q 'Do not write outside the project root\.' "$project_root/.codex/agents/paf_implementer.toml"
@@ -70,9 +70,9 @@ if rg -q '^\[agents."paf.implementer"\]$' "$project_root/.codex/config.toml"; th
   exit 1
 fi
 
-# legacy developer_instructions header should still be accepted
+# legacy prompt header should still be accepted
 cat > "$run_dir/legacy_plan.tsv" <<'TSV'
-agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
+agent_id	role_name	priority	reason	config_relpath	description	prompt	model	model_reasoning_effort	sandbox_mode
 paf_legacy	Legacy Agent	15	compat source=official-1	agents/paf_legacy.toml	Verify legacy header compatibility.	Support old plan header.	gpt-5	low	workspace-write
 TSV
 
@@ -82,7 +82,7 @@ bash "$SCRIPT_PATH" apply-plan \
   --plan "$run_dir/legacy_plan.tsv" \
   --out-dir "$legacy_run_dir" >/dev/null
 
-rg -q '^prompt = """$' "$project_root/.codex/agents/paf_legacy.toml"
+rg -q '^developer_instructions = """$' "$project_root/.codex/agents/paf_legacy.toml"
 
 # public CLI should stay minimal
 if bash "$SCRIPT_PATH" render-config >/dev/null 2>&1; then
