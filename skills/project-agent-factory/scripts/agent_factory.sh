@@ -122,7 +122,7 @@ validate_agent_config_relpath() {
       ;;
   esac
 
-  [[ "$normalized" =~ ^agents/[A-Za-z0-9._/-]+\.toml$ ]] || die "config_relpath must match agents/*.toml: $config_relpath"
+  [[ "$normalized" =~ ^agents/[A-Za-z0-9._-]+\.toml$ ]] || die "config_relpath must match agents/*.toml: $config_relpath"
   printf '%s\n' "$normalized"
 }
 

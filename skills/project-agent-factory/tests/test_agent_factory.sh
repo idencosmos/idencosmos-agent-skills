@@ -159,6 +159,20 @@ if bash "$SCRIPT_PATH" apply-plan \
 fi
 [[ ! -f "$outside_target" ]]
 
+# apply-plan must reject nested config_relpath (only agents/*.toml allowed)
+cat > "$run_dir/bad_nested_config.tsv" <<'TSV'
+agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
+nested	Nested Agent	10	invalid	agents/nested/nested.toml	Nested path should fail.	Stay at one level.	gpt-5	medium	workspace-write
+TSV
+
+if bash "$SCRIPT_PATH" apply-plan \
+  --project-root "$project_root" \
+  --plan "$run_dir/bad_nested_config.tsv" \
+  --out-dir "$run_dir/bad_nested_run" >/dev/null 2>&1; then
+  echo "error: apply-plan should reject nested config_relpath" >&2
+  exit 1
+fi
+
 # apply-plan should handle CRLF plans without leaking carriage returns to TOML
 printf 'agent_id\trole_name\tpriority\treason\tconfig_relpath\tdescription\tdeveloper_instructions\tmodel\tmodel_reasoning_effort\tsandbox_mode\r\n' > "$run_dir/crlf_plan.tsv"
 printf 'paf_windows\tWindows Agent\t30\tcrlf\tagents/paf_windows.toml\tHandle CRLF plan rows.\tKeep outputs normalized.\tgpt-5\tmedium\tworkspace-write\r\n' >> "$run_dir/crlf_plan.tsv"

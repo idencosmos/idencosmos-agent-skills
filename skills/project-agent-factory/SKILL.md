@@ -69,6 +69,7 @@ agent_id	role_name	priority	reason	config_relpath	description	developer_instruct
 - `agent_id`와 `config_relpath`는 중복되면 안 됩니다.
 - `priority`는 정수이며 `1` 이상이어야 합니다.
 - `config_relpath`는 `agents/*.toml`만 허용됩니다.
+- `config_relpath`는 하위 디렉터리를 허용하지 않습니다(예: `agents/paf_explorer.toml` 허용, `agents/backend/paf_explorer.toml` 금지).
 - `agent_id`는 영문/숫자/`._-`만 허용됩니다.
 - `model_reasoning_effort`: `low|medium|high`
 - `sandbox_mode`: `read-only|workspace-write|danger-full-access`
