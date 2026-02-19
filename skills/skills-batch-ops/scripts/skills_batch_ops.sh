@@ -56,21 +56,6 @@ is_skill_ref() {
   [[ "$1" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[A-Za-z0-9_.:-]+$ ]]
 }
 
-extract_skill_names_from_list_file() {
-  local input="$1"
-  awk '
-  {
-    line=$0
-    gsub(/\x1b\[[0-9;]*m/, "", line)
-    if (line ~ /^[[:space:]]*│[[:space:]]{4}[A-Za-z0-9_.-]+[[:space:]]*$/) {
-      gsub(/^[[:space:]]*│[[:space:]]*/, "", line)
-      gsub(/[[:space:]]*$/, "", line)
-      print line
-    }
-  }
-  ' "$input" | awk '!seen[$0]++'
-}
-
 write_content_review_header() {
   local out="$1"
   ensure_parent_dir "$out"
@@ -321,7 +306,20 @@ for (const workerPath of workerFiles) {
     attempt: indexOf(h, 'worker_attempt'),
     orchestrator: indexOf(h, 'orchestrator_name'),
   };
-  const requiredHeaderMissing = Object.values(idx).some((v) => v < 0);
+  const requiredHeaderColumns = [
+    idx.taskId,
+    idx.expectedStage,
+    idx.workerRunId,
+    idx.workerId,
+    idx.startedAt,
+    idx.finishedAt,
+    idx.attempt,
+    idx.orchestrator,
+  ];
+  if (stage === 'review') {
+    requiredHeaderColumns.push(idx.skillRef);
+  }
+  const requiredHeaderMissing = requiredHeaderColumns.some((v) => v < 0);
   if (requiredHeaderMissing) {
     reasonCodes.add('missing_worker_metadata');
   }
@@ -548,7 +546,6 @@ NODE
 }
 
 cmd_validate_content() {
-  require_cmd npx
   require_cmd awk
 
   local manifest=""
@@ -556,13 +553,11 @@ cmd_validate_content() {
   local status_filter="all"
   local limit=""
   local processed=0
-  local tmp_dir list_cache_dir manifest_rows
+  local tmp_dir manifest_rows
   local -a selected_refs=()
 
   local skill_ref repo skill manifest_status_lc expected_repo expected_skill
   local name_check install_check skill_md_check gate_status gate_reason gate_notes
-  local sandbox_dir install_out skill_md_file list_cache_file list_cache_status_file cached_list_status
-  local repo_cache_key listed_skill
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -611,9 +606,7 @@ cmd_validate_content() {
 
   write_content_review_header "$out"
   tmp_dir="$(mktemp -d)"
-  list_cache_dir="$tmp_dir/list_cache"
   manifest_rows="$tmp_dir/manifest.rows.tsv"
-  mkdir -p "$list_cache_dir"
   extract_manifest_rows "$manifest" "$manifest_rows" || die "failed to parse manifest headers: $manifest"
 
   is_selected_ref() {
@@ -647,8 +640,8 @@ cmd_validate_content() {
 
     processed=$((processed + 1))
     name_check=""
-    install_check="skipped"
-    skill_md_check="missing"
+    install_check="deferred_to_install"
+    skill_md_check="deferred_to_install"
     gate_status="gate_fail"
     gate_reason=""
     gate_notes=""
@@ -661,60 +654,10 @@ cmd_validate_content() {
       gate_reason="invalid_ref"
       gate_notes="skill_ref/repo/skill consistency check failed"
     else
-      repo_cache_key="$(printf '%s' "$repo" | tr '/:@.' '____' | tr -cs '[:alnum:]_' '_')"
-      list_cache_file="$list_cache_dir/${repo_cache_key}.list.txt"
-      list_cache_status_file="$list_cache_dir/${repo_cache_key}.status"
-
-      if [[ ! -f "$list_cache_status_file" ]]; then
-        if FORCE_COLOR=0 npx skills add "$repo" --list > "$list_cache_file" 2>&1 < /dev/null; then
-          printf 'ok\n' > "$list_cache_status_file"
-        else
-          printf 'failed\n' > "$list_cache_status_file"
-        fi
-      fi
-
-      cached_list_status="$(head -n 1 "$list_cache_status_file" 2>/dev/null || true)"
-      if [[ "$cached_list_status" != "ok" ]]; then
-        name_check="list_failed"
-        gate_reason="list_failed"
-        gate_notes="repository skill list query failed"
-      else
-        name_check="not_found"
-        while IFS= read -r listed_skill; do
-          if [[ "$listed_skill" == "$skill" ]]; then
-            name_check="matched"
-            break
-          fi
-        done < <(extract_skill_names_from_list_file "$list_cache_file")
-
-        if [[ "$name_check" != "matched" ]]; then
-          gate_reason="not_found"
-          gate_notes="skill not found in repository list"
-        else
-          sandbox_dir="$tmp_dir/work_${processed}"
-          mkdir -p "$sandbox_dir"
-          install_out="$tmp_dir/install_${processed}.txt"
-
-          if (cd "$sandbox_dir" && FORCE_COLOR=0 npx skills add "$repo" --skill "$skill" -y > "$install_out" 2>&1 < /dev/null); then
-            install_check="installed"
-            skill_md_file="$sandbox_dir/.agents/skills/$skill/SKILL.md"
-            if [[ -f "$skill_md_file" ]]; then
-              skill_md_check="present"
-              gate_status="gate_pass"
-              gate_reason="ok"
-              gate_notes="all safety gates passed"
-            else
-              skill_md_check="missing"
-              gate_reason="skill_md_missing"
-              gate_notes="install succeeded but SKILL.md not found"
-            fi
-          else
-            install_check="install_failed"
-            gate_reason="install_failed"
-            gate_notes="single skill installation failed"
-          fi
-        fi
-      fi
+      name_check="format_ok"
+      gate_status="gate_pass"
+      gate_reason="provisional_ai_gate"
+      gate_notes="structure-only validation passed; install/runtime checks deferred to install-approved"
     fi
 
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \

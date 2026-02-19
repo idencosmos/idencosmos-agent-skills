@@ -9,7 +9,7 @@ description: 외부 AI 오케스트레이터가 만든 후보/리뷰 결과에 �
 스크립트는 아래 4가지 게이트 업무만 수행합니다.
 
 1. `verify-parallel-proof`: 워커 병렬 실행 증거 strict 검증
-2. `validate-content`: `skill_ref/repo/skill` 정합성 + 설치 가능 + `SKILL.md` 존재 게이트
+2. `validate-content`: `skill_ref/repo/skill` 구조 정합성만 검증하고 `provisional_ai_gate`를 부여
 3. `install-approved`: `approved`만 설치 (병렬 증거 `passed=true` + `review_content.tsv`에서 `gate_pass` 필수)
 4. `audit`: 설치/검증 감사 로그 생성
 
@@ -31,7 +31,7 @@ description: 외부 AI 오케스트레이터가 만든 후보/리뷰 결과에 �
 2. `verify-parallel-proof --stage discovery`
 3. `verify-parallel-proof --stage review`
 4. 외부 AI가 최종 `review_manifest.ai.tsv` 작성 (`status` 포함)
-5. `validate-content`로 Gate 1/2 확인
+5. `validate-content`로 구조 게이트 확인 (`provisional_ai_gate`)
 6. `install-approved --proof <parallel_proof.summary.json> --content-report <review_content.tsv>`
 7. `audit`
 
@@ -43,7 +43,12 @@ description: 외부 AI 오케스트레이터가 만든 후보/리뷰 결과에 �
   - `worker_run_id`, `worker_id`
   - `worker_started_at`, `worker_finished_at`
   - `worker_attempt`, `orchestrator_name`
-- Review stage에서는 queue/worker 모두 `skill_ref`를 채워 두는 것을 권장합니다.
+- Review stage에서는 queue/worker 모두 `skill_ref`를 필수로 채웁니다.
+
+## `validate-content` gate 의미
+
+- `gate_pass + provisional_ai_gate`: 구조 정합성만 통과. 설치 가능성/런타임 검증은 `install-approved` 단계로 이월
+- `gate_fail + invalid_ref`: `skill_ref/repo/skill` 정합성 오류
 
 ## 병렬 증거 실패 코드
 

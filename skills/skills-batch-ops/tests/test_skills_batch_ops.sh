@@ -222,6 +222,15 @@ D002	discovery	example/repo@skill-beta	example/repo	skill-beta	github	evidence-2
 EOF_W
 }
 
+build_discovery_worker_no_skill_ref_fixture() {
+  local out="$1"
+  cat > "$out" <<'EOF_W'
+task_id	expected_stage	repo	skill	discovery_channels	discovery_evidence	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision	ai_recommended_status	ai_summary	ai_rationale	ai_reviewer	ai_reviewed_at	worker_run_id	worker_id	worker_started_at	worker_finished_at	worker_attempt	orchestrator_name
+D001	discovery	example/repo	skill-alpha	find	evidence-1	90	88	20	0.95	approve	approved	strong alpha	rationale-a	d-worker-a	2026-02-18T10:00:00Z	run-1	worker-1	2026-02-18T10:00:00Z	2026-02-18T10:02:00Z	1	orch-x
+D002	discovery	example/repo	skill-beta	github	evidence-2	84	80	25	0.90	hold	pending	beta candidate	rationale-b	d-worker-b	2026-02-18T10:00:30Z	run-2	worker-2	2026-02-18T10:00:30Z	2026-02-18T10:03:30Z	1	orch-x
+EOF_W
+}
+
 build_discovery_worker_missing_coverage_fixture() {
   local out="$1"
   cat > "$out" <<'EOF_W'
@@ -274,6 +283,24 @@ test_verify_parallel_proof_success_process() {
   assert_contains "$tmp/discovery_parallel_summary.json" '"overlap_pairs": 1' || return 1
 }
 
+test_verify_parallel_proof_discovery_skill_ref_optional_process() {
+  local tmp
+  tmp="$(mktemp -d)"
+
+  build_discovery_queue_fixture "$tmp/review_discovery.queue.tsv"
+  build_discovery_worker_no_skill_ref_fixture "$tmp/worker.tsv"
+
+  "$SCRIPT_PATH" verify-parallel-proof \
+    --stage discovery \
+    --queue "$tmp/review_discovery.queue.tsv" \
+    --out "$tmp/discovery_parallel_proof.tsv" \
+    --summary "$tmp/discovery_parallel_summary.json" \
+    "$tmp/worker.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
+
+  assert_contains "$tmp/discovery_parallel_summary.json" '"passed": true' || return 1
+  assert_not_contains "$tmp/discovery_parallel_summary.json" 'missing_worker_metadata' || return 1
+}
+
 test_verify_parallel_proof_fail_coverage_process() {
   local tmp
   tmp="$(mktemp -d)"
@@ -317,31 +344,29 @@ test_verify_parallel_proof_fail_stage_mismatch_process() {
 test_validate_content_gate_process() {
   local tmp
   tmp="$(mktemp -d)"
-  setup_mock_env "$tmp"
 
   cat > "$tmp/review_manifest.tsv" <<'EOF_MANIFEST'
 skill_ref	repo	skill	discovery_channels	discovery_summary	discovery_confidence	status	review_notes	approved_by	approved_at	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision
 example/repo@skill-alpha	example/repo	skill-alpha	find	alpha	0.8	pending	note							
 bad-format	example/repo	skill-alpha	find	bad	0.3	pending	note							
+example/repo@skill-beta	example/other	skill-beta	find	mismatch	0.3	pending	note							
 example/repo@unknown-skill	example/repo	unknown-skill	find	unknown	0.3	pending	note							
 example/repo@skill-fail-install	example/repo	skill-fail-install	find	fail-install	0.3	pending	note							
-example/repo@skill-missing-md	example/repo	skill-missing-md	find	missing-md	0.3	pending	note							
 EOF_MANIFEST
 
-  PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" validate-content --manifest "$tmp/review_manifest.tsv" --status pending --out "$tmp/review_content.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
+  "$SCRIPT_PATH" validate-content --manifest "$tmp/review_manifest.tsv" --status pending --out "$tmp/review_content.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
 
   assert_row_count "$tmp/review_content.tsv" 5 || return 1
-  awk -F '\t' 'NR>1 && $1=="example/repo@skill-alpha" {exit !($8=="gate_pass" && $9=="ok")}' "$tmp/review_content.tsv" || return 1
+  awk -F '\t' 'NR>1 && $1=="example/repo@skill-alpha" {exit !($5=="format_ok" && $6=="deferred_to_install" && $7=="deferred_to_install" && $8=="gate_pass" && $9=="provisional_ai_gate")}' "$tmp/review_content.tsv" || return 1
   awk -F '\t' 'NR>1 && $1=="bad-format" {exit !($5=="invalid_ref" && $8=="gate_fail" && $9=="invalid_ref")}' "$tmp/review_content.tsv" || return 1
-  awk -F '\t' 'NR>1 && $1=="example/repo@unknown-skill" {exit !($5=="not_found" && $8=="gate_fail" && $9=="not_found")}' "$tmp/review_content.tsv" || return 1
-  awk -F '\t' 'NR>1 && $1=="example/repo@skill-fail-install" {exit !($6=="install_failed" && $8=="gate_fail" && $9=="install_failed")}' "$tmp/review_content.tsv" || return 1
-  awk -F '\t' 'NR>1 && $1=="example/repo@skill-missing-md" {exit !($7=="missing" && $8=="gate_fail" && $9=="skill_md_missing")}' "$tmp/review_content.tsv" || return 1
+  awk -F '\t' 'NR>1 && $1=="example/repo@skill-beta" {exit !($5=="invalid_ref" && $8=="gate_fail" && $9=="invalid_ref")}' "$tmp/review_content.tsv" || return 1
+  awk -F '\t' 'NR>1 && $1=="example/repo@unknown-skill" {exit !($5=="format_ok" && $8=="gate_pass" && $9=="provisional_ai_gate")}' "$tmp/review_content.tsv" || return 1
+  awk -F '\t' 'NR>1 && $1=="example/repo@skill-fail-install" {exit !($5=="format_ok" && $8=="gate_pass" && $9=="provisional_ai_gate")}' "$tmp/review_content.tsv" || return 1
 }
 
 test_validate_content_stdin_safe_process() {
   local tmp
   tmp="$(mktemp -d)"
-  setup_mock_env "$tmp"
 
   cat > "$tmp/review_manifest.tsv" <<'EOF_MANIFEST'
 repo	skill_ref	skill	discovery_channels	discovery_summary	discovery_confidence	manifest_status	review_notes	approved_by	approved_at	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision
@@ -350,9 +375,11 @@ example/repo2	example/repo2@skill-beta	skill-beta	find	beta	0.7	pending	note
 example/repo3	example/repo3@skill-alpha	skill-alpha	find	alpha2	0.6	pending	note							
 EOF_MANIFEST
 
-  PATH="$tmp/bin:$PATH" MOCK_NPX_READ_STDIN_ON_ADD="1" "$SCRIPT_PATH" validate-content --manifest "$tmp/review_manifest.tsv" --status pending --out "$tmp/review_content.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
+  "$SCRIPT_PATH" validate-content --manifest "$tmp/review_manifest.tsv" --status pending --out "$tmp/review_content.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt" || return 1
 
   assert_row_count "$tmp/review_content.tsv" 3 || return 1
+  awk -F '\t' 'NR>1 && $8!="gate_pass" {exit 1} END{exit 0}' "$tmp/review_content.tsv" || return 1
+  awk -F '\t' 'NR>1 && $9!="provisional_ai_gate" {exit 1} END{exit 0}' "$tmp/review_content.tsv" || return 1
 }
 
 test_install_approved_requires_proof_process() {
@@ -365,9 +392,9 @@ skill_ref	repo	skill	discovery_channels	discovery_summary	discovery_confidence	s
 example/repo@skill-alpha	example/repo	skill-alpha	find	alpha	0.9	approved	note	reviewer	2026-02-18T12:00:00Z	90	88	20	0.95	approve
 EOF_MANIFEST
 
-  cat > "$tmp/review_content.tsv" <<'EOF_CONTENT'
+cat > "$tmp/review_content.tsv" <<'EOF_CONTENT'
 skill_ref	repo	skill	manifest_status	name_check	install_check	skill_md_check	gate_status	gate_reason	gate_notes
-example/repo@skill-alpha	example/repo	skill-alpha	approved	matched	installed	present	gate_pass	ok	all safety gates passed
+example/repo@skill-alpha	example/repo	skill-alpha	approved	format_ok	deferred_to_install	deferred_to_install	gate_pass	provisional_ai_gate	structure-only validation passed; install/runtime checks deferred to install-approved
 EOF_CONTENT
 
   if PATH="$tmp/bin:$PATH" "$SCRIPT_PATH" install-approved --manifest "$tmp/review_manifest.ai.tsv" --content-report "$tmp/review_content.tsv" --dry-run > "$tmp/stdout.txt" 2> "$tmp/stderr.txt"; then
@@ -388,9 +415,9 @@ skill_ref	repo	skill	discovery_channels	discovery_summary	discovery_confidence	s
 example/repo@skill-alpha	example/repo	skill-alpha	find	alpha	0.9	approved	note	reviewer	2026-02-18T12:00:00Z	90	88	20	0.95	approve
 EOF_MANIFEST
 
-  cat > "$tmp/review_content.tsv" <<'EOF_CONTENT'
+cat > "$tmp/review_content.tsv" <<'EOF_CONTENT'
 skill_ref	repo	skill	manifest_status	name_check	install_check	skill_md_check	gate_status	gate_reason	gate_notes
-example/repo@skill-alpha	example/repo	skill-alpha	approved	matched	installed	present	gate_pass	ok	all safety gates passed
+example/repo@skill-alpha	example/repo	skill-alpha	approved	format_ok	deferred_to_install	deferred_to_install	gate_pass	provisional_ai_gate	structure-only validation passed; install/runtime checks deferred to install-approved
 EOF_CONTENT
 
   cat > "$tmp/parallel_proof.summary.json" <<'EOF_SUMMARY'
@@ -416,10 +443,10 @@ example/repo	example/repo@skill-alpha	skill-alpha	find	alpha	0.9	approved	note	r
 example/toolbox	example/toolbox@skill-beta	skill-beta	github	beta	0.8	approved	note	reviewer	2026-02-18T12:01:00Z	88	84	25	0.90	approve
 EOF_MANIFEST
 
-  cat > "$tmp/review_content.tsv" <<'EOF_CONTENT'
+cat > "$tmp/review_content.tsv" <<'EOF_CONTENT'
 skill_ref	repo	skill	manifest_status	name_check	install_check	skill_md_check	gate_status	gate_reason	gate_notes
-example/repo@skill-alpha	example/repo	skill-alpha	approved	matched	installed	present	gate_pass	ok	all safety gates passed
-example/toolbox@skill-beta	example/toolbox	skill-beta	approved	matched	installed	present	gate_fail	install_failed	single skill installation failed
+example/repo@skill-alpha	example/repo	skill-alpha	approved	format_ok	deferred_to_install	deferred_to_install	gate_pass	provisional_ai_gate	structure-only validation passed; install/runtime checks deferred to install-approved
+example/toolbox@skill-beta	example/toolbox	skill-beta	approved	format_ok	deferred_to_install	deferred_to_install	gate_fail	install_failed	single skill installation failed
 EOF_CONTENT
 
   cat > "$tmp/parallel_proof.summary.json" <<'EOF_SUMMARY'
@@ -447,11 +474,11 @@ example/repo@skill-beta	example/repo	skill-beta	find	beta	0.7	pending	note			60	
 example/toolbox@skill-beta	example/toolbox	skill-beta	github	beta2	0.8	approved	note	reviewer	2026-02-18T12:03:00Z	88	80	25	0.90	approve
 EOF_MANIFEST
 
-  cat > "$tmp/review_content.tsv" <<'EOF_CONTENT'
+cat > "$tmp/review_content.tsv" <<'EOF_CONTENT'
 skill_ref	repo	skill	manifest_status	name_check	install_check	skill_md_check	gate_status	gate_reason	gate_notes
-example/repo@skill-alpha	example/repo	skill-alpha	approved	matched	installed	present	gate_pass	ok	all safety gates passed
-example/repo@skill-beta	example/repo	skill-beta	pending	matched	installed	present	gate_fail	invalid_ref	skill_ref/repo/skill consistency check failed
-example/toolbox@skill-beta	example/toolbox	skill-beta	approved	matched	installed	present	gate_pass	ok	all safety gates passed
+example/repo@skill-alpha	example/repo	skill-alpha	approved	format_ok	deferred_to_install	deferred_to_install	gate_pass	provisional_ai_gate	structure-only validation passed; install/runtime checks deferred to install-approved
+example/repo@skill-beta	example/repo	skill-beta	pending	format_ok	deferred_to_install	deferred_to_install	gate_fail	invalid_ref	skill_ref/repo/skill consistency check failed
+example/toolbox@skill-beta	example/toolbox	skill-beta	approved	format_ok	deferred_to_install	deferred_to_install	gate_pass	provisional_ai_gate	structure-only validation passed; install/runtime checks deferred to install-approved
 EOF_CONTENT
 
   cat > "$tmp/parallel_proof.summary.json" <<'EOF_SUMMARY'
@@ -563,6 +590,7 @@ EOF_MANIFEST
 
 log "## Process Suite"
 run_test "process" "verify-parallel-proof success" test_verify_parallel_proof_success_process
+run_test "process" "verify-parallel-proof discovery skill_ref optional" test_verify_parallel_proof_discovery_skill_ref_optional_process
 run_test "process" "verify-parallel-proof coverage fail" test_verify_parallel_proof_fail_coverage_process
 run_test "process" "verify-parallel-proof stage mismatch fail" test_verify_parallel_proof_fail_stage_mismatch_process
 run_test "process" "validate-content gate" test_validate_content_gate_process
