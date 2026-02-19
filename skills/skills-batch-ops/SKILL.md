@@ -25,13 +25,30 @@ description: 프로젝트에 맞는 스킬을 찾아 설치해야 할 때 사용
 
 ```bash
 SBP_SCRIPT="${SBP_SCRIPT:-$HOME/.agents/skills/skills-batch-ops/scripts/skills_batch_pipeline.py}"
+if [[ ! -x "$SBP_SCRIPT" && -x "$(pwd)/idencosmos-agent-skills/skills/skills-batch-ops/scripts/skills_batch_pipeline.py" ]]; then
+  SBP_SCRIPT="$(pwd)/idencosmos-agent-skills/skills/skills-batch-ops/scripts/skills_batch_pipeline.py"
+fi
 if [[ ! -x "$SBP_SCRIPT" && -x "$(pwd)/skills/skills-batch-ops/scripts/skills_batch_pipeline.py" ]]; then
   SBP_SCRIPT="$(pwd)/skills/skills-batch-ops/scripts/skills_batch_pipeline.py"
 fi
 if [[ ! -x "$SBP_SCRIPT" ]]; then
-  echo "error: set SBP_SCRIPT to skills-batch-ops/scripts/skills_batch_pipeline.py" >&2
+  echo "error: set SBP_SCRIPT to skills-batch-ops/scripts/skills_batch_pipeline.py (or idencosmos-agent-skills/... path)" >&2
   exit 1
 fi
+```
+
+## Preflight (필수)
+
+```bash
+# 1) discovery 명령이 실행 가능한지 확인
+npx --yes skills find "test" >/dev/null
+
+# 2) find-skills 스킬 설치가 필요한 환경이면 먼저 설치
+# (이미 설치되어 있으면 skip 가능)
+npx skills add vercel-labs/skills --skill find-skills -y
+
+# 3) 파이프라인 엔트리포인트 확인
+python3 "$SBP_SCRIPT" --help >/dev/null
 ```
 
 ## Quick Start (End-to-End)
@@ -60,6 +77,8 @@ python3 "$SBP_SCRIPT" run \
 python3 "$SBP_SCRIPT" collect-sources-live \
   --project-root "$(pwd)" \
   --run-dir "$RUN_DIR" \
+  --find-command "npx --yes skills find" \
+  --find-timeout-sec 45 \
   --run-after-collect \
   --min-methods 2 \
   --min-project-keyword-hits 1 \
@@ -105,7 +124,7 @@ vercel-labs/skills@find-skills	vercel-labs/skills	find-skills	238456	https://...
 
 1. `find-skills` 결과 확보:
 - 프로젝트 요구를 기준으로 `find-skills`를 실행해 raw 결과를 `find_output.txt`에 저장합니다.
-- 기본 명령은 `npx skills find "<project query>"`이며, `vercel-labs/skills@find-skills` 계열 출력 포맷(`owner/repo@skill`, installs)을 그대로 보존합니다.
+- 기본 명령은 `npx --yes skills find "<project query>"`이며, `vercel-labs/skills@find-skills` 계열 출력 포맷(`owner/repo@skill`, installs)을 그대로 보존합니다.
 
 2. 인기/사용량 기반 후보 확보:
 - 공개 인기 목록에서 후보를 수집해 `popular_output.html`(또는 text dump)로 저장합니다.
@@ -130,7 +149,7 @@ python3 "$SBP_SCRIPT" collect-sources-live \
 자동 수행 항목:
 
 1. 프로젝트 분석(`project_profile.tsv`)
-2. `npx skills find <query>` 실행 후 `find_output.txt` 생성
+2. `npx --yes skills find <query>` 실행 후 `find_output.txt` 생성
 3. `https://skills.sh/` 수집 후 `popular_output.html` 생성
 4. GitHub 검색 API 기반 인터넷 후보 `web_candidates.tsv` 생성 (API 실패/응답 0건 시 `skills find` 기반 웹 후보로 자동 fallback)
 5. `candidates.find.tsv`, `candidates.popular.tsv`, `candidates.web.tsv`까지 정규화
@@ -139,7 +158,8 @@ python3 "$SBP_SCRIPT" collect-sources-live \
 
 - `--find-query`: find 검색어 고정
 - `--web-query`: 웹 검색어 추가(여러 번 지정 가능)
-- `--find-command`: find 실행 명령 커스터마이즈 (기본 `npx skills find`)
+- `--find-command`: find 실행 명령 커스터마이즈 (기본 `npx --yes skills find`)
+- `--find-timeout-sec`: find 명령 타임아웃 초 (기본 `45`)
 - `--web-mode seed --web-seed-input <path>`: 인터넷 검색 대신 사전 정리 TSV 사용(오프라인/테스트용)
 - 기본 `web-mode=github`에서 GitHub API 호출이 실패하거나 후보가 0건이면 `skills find` 기반 웹 후보 수집으로 자동 fallback합니다.
 - `--allow-empty-sources`: 비어 있는 채널 허용
@@ -233,7 +253,11 @@ python3 "$SBP_SCRIPT" install-manifest \
   --dry-run
 ```
 
-실설치 시 `--dry-run`을 제거하세요.
+실설치 시 `--dry-run`을 제거하세요. 설치 전에는 승인 항목을 먼저 눈으로 확인합니다.
+
+```bash
+awk -F '\t' 'NR==1 || $11=="approved"' "$RUN_DIR/review_manifest.ai.tsv"
+```
 
 ## Decision Rules
 
@@ -241,6 +265,33 @@ python3 "$SBP_SCRIPT" install-manifest \
 - 검증 통과 + `method_count >= min_methods` + `project_keyword_hits >= min_project_keyword_hits`만 `approved`.
 - 기본값은 `min_project_keyword_hits=1`이며, 프로젝트 적합성 게이트를 완화하려면 `--min-project-keyword-hits 0`을 사용합니다.
 - `limit` 초과 승인 후보는 `pending`으로 조정합니다.
+
+## Review Output Format
+
+최종 보고는 아래 형식을 기본으로 사용합니다.
+
+```markdown
+# Skills Batch Ops 결과
+
+## Source Coverage
+- find: <count>
+- popular: <count>
+- web: <count>
+
+## Content Review
+- passed: <count>
+- failed: <count>
+- failed reasons top3: <reason1>, <reason2>, <reason3>
+
+## Install Plan
+- approved: <count>
+- pending: <count>
+- rejected: <count>
+- dry-run report: <path>
+
+## Installed (or Dry-run) Skills
+- owner/repo@skill - rationale
+```
 
 ## Legacy Gate-Only Script
 

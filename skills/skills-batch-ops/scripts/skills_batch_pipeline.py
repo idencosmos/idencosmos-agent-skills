@@ -686,13 +686,31 @@ def derive_live_queries(
     return find_query, web_queries
 
 
-def run_find_query(find_command: str, query: str, out: Path) -> None:
+def run_find_query(find_command: str, query: str, out: Path, timeout_sec: int) -> None:
     cmd = shlex.split(find_command)
     if not cmd:
         raise RuntimeError("find-command is empty")
     cmd.append(query)
 
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    safe_timeout = max(int(timeout_sec), 1)
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=safe_timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        partial_out = (exc.stdout or "").strip() if isinstance(exc.stdout, str) else ""
+        partial_err = (exc.stderr or "").strip() if isinstance(exc.stderr, str) else ""
+        merged_partial = partial_out
+        if partial_err:
+            merged_partial = f"{merged_partial}\n{partial_err}" if merged_partial else partial_err
+        ensure_parent(out)
+        out.write_text((merged_partial + "\n") if merged_partial else "", encoding="utf-8")
+        raise RuntimeError(f"find command timed out after {safe_timeout}s: {' '.join(cmd)}") from exc
+
     text_out = (proc.stdout or "").strip()
     text_err = (proc.stderr or "").strip()
     merged_output = text_out
@@ -926,6 +944,7 @@ def collect_web_candidates_via_find(
     web_queries: list[str],
     out: Path,
     find_command: str,
+    timeout_sec: int,
 ) -> None:
     rows_by_skill_ref: dict[str, dict[str, object]] = {}
 
@@ -935,7 +954,16 @@ def collect_web_candidates_via_find(
             raise RuntimeError("find-command is empty")
         cmd.append(query)
 
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=max(int(timeout_sec), 1),
+            )
+        except subprocess.TimeoutExpired:
+            continue
         if proc.returncode != 0:
             continue
         evidence_url = f"https://skills.sh/?q={quote_plus(query)}"
@@ -993,7 +1021,12 @@ def collect_sources_live(args: argparse.Namespace) -> int:
     find_query, web_queries = derive_live_queries(profile, args.find_query, args.web_query)
 
     find_evidence_url = args.find_evidence_url.strip() or f"https://skills.sh/?q={quote_plus(find_query)}"
-    run_find_query(args.find_command, find_query, find_output)
+    run_find_query(
+        args.find_command,
+        find_query,
+        find_output,
+        timeout_sec=max(args.find_timeout_sec, 1),
+    )
     collect_find(find_output, candidates_find, evidence_url=find_evidence_url)
 
     popular_html = fetch_text(args.popular_url, timeout_sec=max(args.timeout_sec, 5))
@@ -1025,6 +1058,7 @@ def collect_sources_live(args: argparse.Namespace) -> int:
                 web_queries=web_queries,
                 out=web_output,
                 find_command=args.find_command,
+                timeout_sec=max(args.find_timeout_sec, 1),
             )
         else:
             if len(read_table(web_output)) == 0:
@@ -1033,6 +1067,7 @@ def collect_sources_live(args: argparse.Namespace) -> int:
                     web_queries=web_queries,
                     out=web_output,
                     find_command=args.find_command,
+                    timeout_sec=max(args.find_timeout_sec, 1),
                 )
 
     collect_web(web_output, candidates_web)
@@ -1421,7 +1456,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     live_cmd.add_argument("--run-dir", required=True)
     live_cmd.add_argument("--find-query")
     live_cmd.add_argument("--web-query", action="append", default=[])
-    live_cmd.add_argument("--find-command", default="npx skills find")
+    live_cmd.add_argument("--find-command", default="npx --yes skills find")
+    live_cmd.add_argument("--find-timeout-sec", type=int, default=45)
     live_cmd.add_argument("--find-evidence-url", default="")
     live_cmd.add_argument("--popular-url", default="https://skills.sh/")
     live_cmd.add_argument("--github-api-base", default="https://api.github.com")

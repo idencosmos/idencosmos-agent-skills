@@ -70,12 +70,18 @@ setup_mock_find_env() {
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${1:-}" == "--yes" || "${1:-}" == "-y" ]]; then
+  shift
+fi
 if [[ "${1:-}" != "skills" || "${2:-}" != "find" ]]; then
   echo "unexpected npx call: $*" >&2
   exit 1
 fi
 
 query="${3:-}"
+if [[ -n "${MOCK_FIND_SLEEP_SEC:-}" ]]; then
+  sleep "$MOCK_FIND_SLEEP_SEC"
+fi
 echo "query=$query" >&2
 printf '\033[38;5;145m%s\033[0m \033[36m%s installs\033[0m\n' \
   "wshobson/agents@python-testing-patterns" "3.4K"
@@ -177,6 +183,44 @@ EOF_README
   assert_file_exists "$tmp/run/candidates.web.tsv" || return 1
   assert_contains "$tmp/run/candidates.web.tsv" "wshobson/agents@python-testing-patterns" || return 1
   assert_contains "$tmp/stdout.txt" "web_fallback: github-api-unavailable" || return 1
+}
+
+test_collect_sources_live_find_timeout_process() {
+  local tmp
+  local rc
+  tmp="$(mktemp -d)"
+  setup_mock_find_env "$tmp"
+
+  mkdir -p "$tmp/project"
+  cat > "$tmp/project/README.md" <<'EOF_README'
+# Demo Project
+
+Python automation and testing workflows.
+EOF_README
+
+  cat > "$tmp/web_seed.tsv" <<'TSV'
+skill_ref	repo	skill	installs	evidence_url	evidence_note
+wshobson/agents@python-testing-patterns	wshobson/agents	python-testing-patterns	3400	https://github.com/wshobson/agents	seed web result
+TSV
+
+  set +e
+  PATH="$tmp/bin:$PATH" MOCK_FIND_SLEEP_SEC=3 python3 "$PIPELINE_SCRIPT" collect-sources-live \
+    --project-root "$tmp/project" \
+    --run-dir "$tmp/run" \
+    --find-command "npx skills find" \
+    --find-timeout-sec 1 \
+    --find-query "python testing" \
+    --popular-url "file://$FIXTURE_DIR/skills_home_sample.html" \
+    --web-mode seed \
+    --web-seed-input "$tmp/web_seed.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt"
+  rc=$?
+  set -e
+
+  [[ "$rc" -ne 0 ]] || {
+    log "assertion failed: expected timeout failure"
+    return 1
+  }
+  assert_contains "$tmp/stderr.txt" "find command timed out after 1s" || return 1
 }
 
 test_manifest_and_install_dry_run_process() {
@@ -297,6 +341,7 @@ log "## Pipeline Suite"
 run_test "collect-find/popular/web + merge" test_collect_and_merge_process
 run_test "collect-sources-live seed mode" test_collect_sources_live_seed_process
 run_test "collect-sources-live github fallback mode" test_collect_sources_live_github_fallback_process
+run_test "collect-sources-live find timeout" test_collect_sources_live_find_timeout_process
 run_test "build-manifest + install-manifest dry-run" test_manifest_and_install_dry_run_process
 run_test "build-manifest project keyword gate" test_manifest_project_keyword_gate_process
 run_test "parser root SKILL.md + CRLF support" test_parser_root_skill_and_crlf_support_process
