@@ -15,6 +15,10 @@ description: AI가 생성한 agent_plan.tsv를 검증하고, 프로젝트 내부
 - `agent_plan.tsv` 스키마를 엄격 검증(필수 컬럼/빈 값/중복/허용값)
 - 공개 CLI 표면을 최소화(`apply-plan` 단일 진입점)하여 우회 실행 경로를 축소
 
+실행 위생 규칙을 지키세요:
+- `--project-root`는 적용 대상 프로젝트 루트로 지정하고, 스킬 디렉토리 자체를 대상으로 사용하지 마세요.
+- 실행으로 생성된 `.codex/` 및 `.agents/project-agent-factory/runs/` 산출물은 대상 프로젝트 산출물로 취급하고 스킬 원본에 포함하지 마세요.
+
 ## Quick Start
 
 ```bash
@@ -62,9 +66,12 @@ agent_id	role_name	priority	reason	config_relpath	description	developer_instruct
 필수 규칙:
 - 모든 컬럼 값은 비어 있으면 안 됩니다.
 - `agent_id`와 `config_relpath`는 중복되면 안 됩니다.
+- `priority`는 정수이며 `1` 이상이어야 합니다.
 - `config_relpath`는 `agents/*.toml`만 허용됩니다.
+- `agent_id`는 영문/숫자/`._-`만 허용됩니다.
 - `model_reasoning_effort`: `low|medium|high`
 - `sandbox_mode`: `read-only|workspace-write|danger-full-access`
+- 헤더 외 추가 컬럼은 허용되지 않습니다.
 
 ## Outputs
 

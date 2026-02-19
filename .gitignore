@@ -1,3 +1,7 @@
 .DS_Store
 node_modules/
 .tmp/
+
+# Generated runtime artifacts (do not version-control skill execution outputs)
+skills/project-agent-factory/.codex/
+skills/project-agent-factory/.agents/
