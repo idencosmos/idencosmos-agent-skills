@@ -1,7 +1,0 @@
-███████╗██╗  ██╗██╗██╗     ██╗     ███████╗
-Install with npx skills add <owner/repo@skill>
-
-vercel-labs/skills@find-skills 238.4K installs
-wshobson/agents@python-testing-patterns 3,400 installs
-wshobson/agents@python-testing-patterns 3,200 installs
-example/repo@skill-alpha 120 installs

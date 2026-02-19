@@ -1,325 +1,141 @@
 ---
 name: skills-batch-ops
-description: 프로젝트에 맞는 스킬을 찾아 설치해야 할 때 사용합니다. (1) 프로젝트 분석, (2) find-skills 후보 수집, (3) 인기/사용량 기반 후보 수집, (4) 인터넷 검색 후보 수집, (5) 후보별 실제 SKILL.md 본문 검토, (6) 승인 항목 설치를 수행합니다.
+description: 프로젝트에 필요한 스킬을 3채널(find-skills/인기/웹)로 탐색하고 실제 SKILL.md 본문 검토 후 승인 스킬만 설치할 때 사용하는 Markdown 지시형 스킬입니다.
 ---
 
 # Skills Batch Ops
 
-`skills-batch-ops`는 아래 1~6 단계를 하나의 파이프라인으로 고정합니다.
+`skills-batch-ops`는 아래 6단계를 고정으로 수행하는 Markdown 지시형 스킬입니다.
 
 1. 프로젝트 분석
-2. `find-skills` 기반 후보 수집
-3. 사용자 수/인지도(인기 목록) 기반 후보 수집
-4. 인터넷 검색 기반 후보 수집
-5. 2~4번 후보의 실제 `SKILL.md` 내용 검증
-6. 승인(`approved`) 후보 설치
+2. `find-skills` 기반 후보 탐색
+3. 인기/사용량 기반 후보 탐색
+4. 인터넷 검색 기반 후보 탐색
+5. 2~4단계 후보의 실제 `SKILL.md` 본문 검토
+6. 승인 후보 설치
 
-필수 실행 계약(권장 기본 경로):
-- 기본 실행은 `collect-sources-live --run-after-collect --dry-run`으로 시작합니다.
-- 2~4단계 탐색 소스(`find/popular/web`) 중 하나라도 비면 실패로 처리합니다.
-- 5단계 검증(`validate-content`)을 통과하지 못한 후보는 설치하지 않습니다.
-- 6단계 설치는 `review_manifest.ai.tsv`에서 `approved`만 대상으로 수행합니다.
-- 실설치는 dry-run 결과를 검토한 뒤에만 진행합니다.
+## 실행 원칙
 
-핵심 원칙:
-- 3개 탐색 채널(`find`, `popular`, `web`)을 모두 사용합니다.
-- 이름만으로 설치하지 않고 반드시 `SKILL.md` 실체를 검증합니다.
-- 프로젝트 키워드와 무관한 후보는 기본적으로 `approved`에 올리지 않습니다.
-- 설치 전에는 기본적으로 `--dry-run`을 먼저 실행합니다.
-- 기본 `run`은 3개 채널 중 하나라도 비어 있으면 실패합니다. 예외가 필요할 때만 `--allow-empty-sources`를 사용합니다.
-- 기본 `collect-sources-live`는 `web` 채널에서 실제 인터넷 검색(GitHub API)을 강제하며, 실패 시 즉시 중단합니다. 예외가 필요할 때만 `--web-fallback-mode find`를 사용합니다.
+- 이 스킬은 **문서 지시만 제공**합니다. 스킬 내부 스크립트 의존 경로를 만들지 마세요.
+- 탐색 채널 `find`, `popular`, `web` 3개를 모두 사용하세요.
+- 스킬 이름만 보고 설치하지 말고, 반드시 실제 `SKILL.md` 본문을 확인하세요.
+- 설치 전에는 반드시 dry-run 계획을 먼저 제시하세요.
+- 정보가 부족해도 질문을 남발하지 말고, 합리적 기본 가정을 적용한 뒤 `가정/영향`을 기록하세요.
 
-## Script Path
+## 기본 산출물
 
-```bash
-SBP_SCRIPT="${SBP_SCRIPT:-$HOME/.agents/skills/skills-batch-ops/scripts/skills_batch_pipeline.py}"
-if [[ ! -x "$SBP_SCRIPT" && -x "$(pwd)/idencosmos-agent-skills/skills/skills-batch-ops/scripts/skills_batch_pipeline.py" ]]; then
-  SBP_SCRIPT="$(pwd)/idencosmos-agent-skills/skills/skills-batch-ops/scripts/skills_batch_pipeline.py"
-fi
-if [[ ! -x "$SBP_SCRIPT" && -x "$(pwd)/idencosmos-agents-skills/skills/skills-batch-ops/scripts/skills_batch_pipeline.py" ]]; then
-  SBP_SCRIPT="$(pwd)/idencosmos-agents-skills/skills/skills-batch-ops/scripts/skills_batch_pipeline.py"
-fi
-if [[ ! -x "$SBP_SCRIPT" && -x "$(pwd)/skills/skills-batch-ops/scripts/skills_batch_pipeline.py" ]]; then
-  SBP_SCRIPT="$(pwd)/skills/skills-batch-ops/scripts/skills_batch_pipeline.py"
-fi
-if [[ ! -x "$SBP_SCRIPT" ]]; then
-  echo "error: set SBP_SCRIPT to skills-batch-ops/scripts/skills_batch_pipeline.py (or idencosmos-agent-skills/... or idencosmos-agents-skills/... path)" >&2
-  exit 1
-fi
-```
+실행 중 아래 문서를 생성/갱신하세요.
 
-## Preflight (필수)
+- `project_profile.md`
+- `candidates.find.md`
+- `candidates.popular.md`
+- `candidates.web.md`
+- `candidates.merged.md`
+- `review.content.md`
+- `review.manifest.md`
+- `install.plan.md`
+- `install.result.md`
 
-```bash
-# 1) find-skills 스킬 설치 확인 (이미 설치되어 있으면 idempotent)
-npx --yes skills add vercel-labs/skills --skill find-skills -y
+템플릿은 `references/report-templates.md`를 사용하세요.
 
-# 2) discovery 명령이 실행 가능한지 확인
-npx --yes skills find "test" >/dev/null
+## Step 1) 프로젝트 분석
 
-# 3) 파이프라인 엔트리포인트 확인
-python3 "$SBP_SCRIPT" --help >/dev/null
-```
+프로젝트 목표, 기술 스택, 제약사항을 먼저 정리하세요.
 
-## Quick Start (End-to-End)
+- 코드/문서에서 핵심 키워드(도메인, 언어, 런타임, 배포환경)를 추출합니다.
+- 설치 가능한 스킬 수 상한(예: 최대 5개)과 보수성 수준(예: 안정성 우선)을 정합니다.
+- 사용자 입력이 부족하면 기본값을 사용하되 `가정/영향`을 남깁니다.
 
-아래 예시는 1~6단계를 한 번에 실행합니다. 실행 전에 2~4단계 입력 파일(`find_output.txt`, `popular_output.html`, `web_candidates.tsv`)을 먼저 준비하세요.
+결과는 `project_profile.md`로 정리하세요.
 
-```bash
-RUN_DIR=".agents/skills-batch-ops/runs/$(date -u +%Y%m%d_%H%M%S)"
-mkdir -p "$RUN_DIR"
+## Step 2) `find-skills` 기반 후보 탐색
 
-python3 "$SBP_SCRIPT" run \
-  --project-root "$(pwd)" \
-  --run-dir "$RUN_DIR" \
-  --find-input "$RUN_DIR/find_output.txt" \
-  --popular-input "$RUN_DIR/popular_output.html" \
-  --web-input "$RUN_DIR/web_candidates.tsv" \
-  --min-methods 2 \
-  --min-project-keyword-hits 1 \
-  --limit 8 \
-  --dry-run
-```
+`find-skills`를 이용해 프로젝트 맞춤 후보를 수집하세요.
 
-라이브 수집(2~4단계 자동화)부터 설치 전 dry-run까지 한 번에 하려면:
+- 필요 시 `npx --yes skills add vercel-labs/skills --skill find-skills -y`로 준비합니다.
+- 프로젝트 키워드 기반 질의를 2~3개 실행합니다.
+- raw 결과와 함께 `owner/repo@skill`, 설치 지표, 한 줄 근거를 정리합니다.
 
-```bash
-python3 "$SBP_SCRIPT" collect-sources-live \
-  --project-root "$(pwd)" \
-  --run-dir "$RUN_DIR" \
-  --find-command "npx --yes skills find" \
-  --find-timeout-sec 45 \
-  --run-after-collect \
-  --min-methods 2 \
-  --min-project-keyword-hits 1 \
-  --limit 8 \
-  --dry-run
-```
+결과는 `candidates.find.md`로 정리하세요.
 
-`run`이 생성하는 기본 산출물:
-- `project_profile.tsv`
-- `candidates.find.tsv`
-- `candidates.popular.tsv`
-- `candidates.web.tsv`
-- `candidates.merged.tsv`
-- `review_content.tsv`
-- `review_manifest.ai.tsv`
-- `install.report.tsv`
+## Step 3) 인기/사용량 기반 후보 탐색
 
-## Input Contracts
+공개 인기 목록에서 프로젝트와 맞는 스킬을 수집하세요.
 
-### `--find-input`
-- `find-skills` 실행 결과 텍스트 파일.
-- 라인 중 `owner/repo@skill` 패턴과 `installs` 수치를 자동 추출합니다.
-- `find-skills` 실행 로그 원문을 그대로 저장하는 것을 권장합니다.
+- 인기 페이지/목록에서 후보를 추립니다.
+- 단순 인기만으로 승인하지 말고 프로젝트 관련성을 함께 기록합니다.
+- 각 후보에 근거 URL을 남깁니다.
 
-### `--popular-input`
-- 인기 스킬 페이지 HTML/텍스트 덤프 파일.
-- `source`, `skillId`, `installs` 필드를 파싱합니다.
-- `installs`가 있는 공개 인기 목록(사용량/인지도 지표)을 사용하세요.
+결과는 `candidates.popular.md`로 정리하세요.
 
-### `--web-input`
-- 인터넷 검색 결과를 정리한 TSV/CSV 파일.
-- 권장 헤더:
+## Step 4) 인터넷 검색 기반 후보 탐색
 
-```tsv
-skill_ref	repo	skill	installs	evidence_url	evidence_note
-vercel-labs/skills@find-skills	vercel-labs/skills	find-skills	238456	https://...	Official discovery helper
-```
+일반 웹 검색으로 추가 후보를 수집하세요.
 
-- `skill_ref`만 있어도 되고, `repo+skill` 조합으로도 입력할 수 있습니다.
-- `evidence_url`은 실제 근거 페이지 URL을 기록하고, `evidence_note`에는 왜 프로젝트에 맞는지 한 줄 근거를 남깁니다.
+- 블로그, 문서, GitHub, 커뮤니티 글 등에서 후보를 찾습니다.
+- 최신성/신뢰도를 보고 우선순위를 나눕니다.
+- 각 후보에 근거 URL, 왜 적합한지 한 줄 설명을 남깁니다.
 
-## Source Collection Checklist (2~4단계)
+결과는 `candidates.web.md`로 정리하세요.
 
-1. `find-skills` 결과 확보:
-- 프로젝트 요구를 기준으로 `find-skills`를 실행해 raw 결과를 `find_output.txt`에 저장합니다.
-- 기본 명령은 `npx --yes skills find "<project query>"`이며, `vercel-labs/skills@find-skills` 계열 출력 포맷(`owner/repo@skill`, installs)을 그대로 보존합니다.
+## Step 5) 실제 `SKILL.md` 본문 검토
 
-2. 인기/사용량 기반 후보 확보:
-- 공개 인기 목록에서 후보를 수집해 `popular_output.html`(또는 text dump)로 저장합니다.
+2~4단계에서 모은 후보를 병합한 뒤, 각 후보의 실제 `SKILL.md`를 확인하세요.
 
-3. 인터넷 검색 기반 후보 확보:
-- 검색 결과를 `web_candidates.tsv`로 정규화하며, 각 행에 `evidence_url`을 채웁니다.
+- 우선 후보 병합표를 `candidates.merged.md`에 만듭니다.
+- 각 후보에 대해 실제 `SKILL.md`를 찾아 읽습니다.
+- 아래 항목을 반드시 확인하세요:
+  - frontmatter `name`, `description` 유효성
+  - 본문이 구체적 워크플로를 제공하는지
+  - placeholder(`TODO`, `TBD`, `PLACEHOLDER`) 과다 여부
+  - 프로젝트 키워드와의 실질 적합성
 
-4. 최소 품질 조건:
-- `find/popular/web` 3채널을 모두 채웁니다.
-- 후보마다 `owner/repo@skill` 식별이 가능해야 합니다.
+검토 기준 상세는 `references/skill-content-review-rubric.md`를 사용하세요.
 
-## Commands
+검토 결과:
 
-### `collect-sources-live` (신규)
+- `review.content.md`: 후보별 본문 검토 상세
+- `review.manifest.md`: `approved | pending | rejected` 최종 판정
+
+권장 판정 규칙:
+
+- `approved`: 본문 검토 통과 + 2개 이상 탐색 채널에서 근거 확보 + 프로젝트 적합성 높음
+- `pending`: 본문은 양호하지만 탐색 근거나 적합성 근거가 부족
+- `rejected`: 본문 검토 실패 또는 프로젝트와 부적합
+
+## Step 6) 필요한 스킬 설치
+
+설치는 `review.manifest.md`에서 `approved`만 대상으로 진행하세요.
+
+1. 먼저 `install.plan.md`에 dry-run 계획을 작성합니다.
+2. 승인된 항목별 설치 명령을 준비합니다.
+3. 실설치 실행 후 `install.result.md`에 성공/실패/원인/재시도 계획을 기록합니다.
+
+명령 예시:
 
 ```bash
-python3 "$SBP_SCRIPT" collect-sources-live \
-  --project-root "$(pwd)" \
-  --run-dir "$RUN_DIR"
+npx --yes skills add <owner/repo> --skill <skill-name> -y
 ```
 
-자동 수행 항목:
+## 품질 게이트
 
-1. 프로젝트 분석(`project_profile.tsv`)
-2. `npx --yes skills find <query>` 실행 후 `find_output.txt` 생성
-3. `https://skills.sh/` 수집 후 `popular_output.html` 생성
-4. GitHub 검색 API 기반 인터넷 후보 `web_candidates.tsv` 생성
-5. `candidates.find.tsv`, `candidates.popular.tsv`, `candidates.web.tsv`까지 정규화
+- 3개 탐색 채널 중 하나라도 비면 완료로 처리하지 마세요.
+- 실제 `SKILL.md`를 읽지 않은 후보는 `approved`로 올리지 마세요.
+- 설치 실패를 숨기지 말고 `install.result.md`에 그대로 기록하세요.
+- 테스트/실행이 막힌 경우, 막힌 원인과 영향 범위를 분리해서 보고하세요.
 
-주요 옵션:
+## 최종 보고 형식
 
-- `--find-query`: find 검색어 고정
-- `--web-query`: 웹 검색어 추가(여러 번 지정 가능)
-- `--find-command`: find 실행 명령 커스터마이즈 (기본 `npx --yes skills find`)
-- `--find-timeout-sec`: find 명령 타임아웃 초 (기본 `45`)
-- `--web-mode seed --web-seed-input <path>`: 인터넷 검색 대신 사전 정리 TSV 사용(오프라인/테스트용)
-- 기본 `web-mode=github`에서 GitHub API 호출 실패/응답 0건은 즉시 실패합니다.
-- `--web-fallback-mode find`: 위 실패 상황에서만 `skills find` 기반 웹 후보로 fallback 허용(예외 운영 모드)
-- `--allow-empty-sources`: 비어 있는 채널 허용
-- `--run-after-collect`: 수집 직후 `run` 단계 자동 실행
-- `--min-project-keyword-hits`: 승인 최소 프로젝트 키워드 히트 수 (기본 `1`, 느슨하게 하려면 `0`)
+최종 응답은 아래 순서를 기본으로 사용하세요.
 
-### `analyze-project`
+1. 프로젝트 분석 요약
+2. 채널별 탐색 결과(find/popular/web)
+3. `SKILL.md` 본문 검토 요약(통과/실패 사유)
+4. 설치 계획 또는 설치 결과
+5. 남은 리스크/추가 확인 항목
 
-```bash
-python3 "$SBP_SCRIPT" analyze-project \
-  --project-root "$(pwd)" \
-  --out "$RUN_DIR/project_profile.tsv"
-```
+## References
 
-프로젝트 기술 스택/키워드를 추출합니다.
-
-### `collect-find`
-
-```bash
-python3 "$SBP_SCRIPT" collect-find \
-  --input "$RUN_DIR/find_output.txt" \
-  --out "$RUN_DIR/candidates.find.tsv"
-```
-
-### `collect-popular`
-
-```bash
-python3 "$SBP_SCRIPT" collect-popular \
-  --input "$RUN_DIR/popular_output.html" \
-  --out "$RUN_DIR/candidates.popular.tsv"
-```
-
-### `collect-web`
-
-```bash
-python3 "$SBP_SCRIPT" collect-web \
-  --input "$RUN_DIR/web_candidates.tsv" \
-  --out "$RUN_DIR/candidates.web.tsv"
-```
-
-### `merge-candidates`
-
-```bash
-python3 "$SBP_SCRIPT" merge-candidates \
-  --out "$RUN_DIR/candidates.merged.tsv" \
-  "$RUN_DIR/candidates.find.tsv" \
-  "$RUN_DIR/candidates.popular.tsv" \
-  "$RUN_DIR/candidates.web.tsv"
-```
-
-### `validate-content`
-
-```bash
-python3 "$SBP_SCRIPT" validate-content \
-  --candidates "$RUN_DIR/candidates.merged.tsv" \
-  --out "$RUN_DIR/review_content.tsv"
-```
-
-각 후보의 원격 저장소에서 `SKILL.md`를 가져와 frontmatter(`name`, `description`)를 점검합니다.
-검증은 이름 확인을 넘어서 본문 품질도 함께 확인합니다.
-
-- 경로 후보: `main|master` 브랜치의 `/SKILL.md`, `/skills/<skill>/SKILL.md`, `/<skill>/SKILL.md`
-- 기본 `main|master`에서 찾지 못하면 저장소 `default_branch`를 조회해 동일 경로를 재시도합니다.
-
-- frontmatter `name` / `description` 유효성
-- 본문 길이(너무 짧은 문서 차단)
-- 본문 placeholder(TODO/TBD/PLACEHOLDER) 포함 여부
-- 본문 기반 `content_keywords` 추출 (프로젝트 키워드 매칭용)
-
-### `build-manifest`
-
-```bash
-python3 "$SBP_SCRIPT" build-manifest \
-  --merged "$RUN_DIR/candidates.merged.tsv" \
-  --content-report "$RUN_DIR/review_content.tsv" \
-  --project-profile "$RUN_DIR/project_profile.tsv" \
-  --out "$RUN_DIR/review_manifest.ai.tsv" \
-  --min-methods 2 \
-  --min-project-keyword-hits 1 \
-  --limit 8
-```
-
-`content_status=passed` + 멀티소스 조건(`min_methods`) + 프로젝트 키워드 조건(`min_project_keyword_hits`)을 만족한 항목만 `approved`로 생성합니다.
-`project_keyword_hits`는 프로젝트 키워드와 스킬 본문/설명 기반 매칭 근거를 제공합니다. 키워드 게이트를 완화하려면 `--min-project-keyword-hits 0`을 사용하세요.
-키워드 추출은 영문/한글 토큰을 함께 사용하므로 한국어 README/설명 기반 프로젝트에서도 적합성 게이트가 동작합니다.
-
-### `install-manifest`
-
-```bash
-python3 "$SBP_SCRIPT" install-manifest \
-  --manifest "$RUN_DIR/review_manifest.ai.tsv" \
-  --report "$RUN_DIR/install.report.tsv" \
-  --dry-run
-```
-
-실설치 시 `--dry-run`을 제거하세요. 설치 전에는 승인 항목을 먼저 눈으로 확인합니다.
-
-```bash
-awk -F '\t' 'NR==1 || $11=="approved"' "$RUN_DIR/review_manifest.ai.tsv"
-```
-
-## Decision Rules
-
-- `SKILL.md` 검증 실패(`content_status!=passed`)는 `rejected`.
-- 검증 통과 + `method_count >= min_methods` + `project_keyword_hits >= min_project_keyword_hits`만 `approved`.
-- 기본값은 `min_project_keyword_hits=1`이며, 프로젝트 적합성 게이트를 완화하려면 `--min-project-keyword-hits 0`을 사용합니다.
-- `limit` 초과 승인 후보는 `pending`으로 조정합니다.
-
-## Review Output Format
-
-최종 보고는 아래 형식을 기본으로 사용합니다.
-
-```markdown
-# Skills Batch Ops 결과
-
-## Source Coverage
-- find: <count>
-- popular: <count>
-- web: <count>
-
-## Content Review
-- passed: <count>
-- failed: <count>
-- failed reasons top3: <reason1>, <reason2>, <reason3>
-
-## Install Plan
-- approved: <count>
-- pending: <count>
-- rejected: <count>
-- dry-run report: <path>
-
-## Installed (or Dry-run) Skills
-- owner/repo@skill - rationale
-```
-
-## Legacy Gate-Only Script
-
-기존 외부 오케스트레이터 호환이 필요하면 아래 레거시 스크립트를 계속 사용할 수 있습니다.
-
-- `scripts/skills_batch_ops.sh`
-- 주요 커맨드: `verify-parallel-proof`, `install-approved`
-
-새 파이프라인(`skills_batch_pipeline.py`)이 기본 경로이며, 레거시는 호환 목적입니다.
-
-## Smoke Test
-
-```bash
-SBP_ROOT="$(cd "$(dirname "$SBP_SCRIPT")/.." && pwd)"
-bash "$SBP_ROOT/tests/test_skills_batch_ops.sh"
-bash "$SBP_ROOT/tests/test_skills_batch_pipeline.sh"
-python3 "$SBP_ROOT/scripts/skills_batch_pipeline.py" --help
-```
+- `references/source-discovery-guide.md`
+- `references/skill-content-review-rubric.md`
+- `references/report-templates.md`
