@@ -6,14 +6,18 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import json
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Iterable
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
 
 
@@ -48,6 +52,9 @@ CONTENT_HEADER = [
     "source_url",
     "frontmatter_name",
     "frontmatter_description",
+    "body_line_count",
+    "body_char_count",
+    "content_keywords",
     "reason",
 ]
 
@@ -60,6 +67,7 @@ MANIFEST_HEADER = [
     "installs_max",
     "content_status",
     "project_keyword_match",
+    "project_keyword_hits",
     "score",
     "manifest_status",
     "status",
@@ -80,6 +88,8 @@ INSTALL_REPORT_HEADER = [
 SKILL_REF_RE = re.compile(r"^(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)@(?P<skill>[A-Za-z0-9_.-]+)$")
 FRONTMATTER_RE = re.compile(r"^---\n(?P<body>.*?)\n---\n?", re.DOTALL)
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
+BODY_PLACEHOLDER_RE = re.compile(r"\b(TODO|TBD|PLACEHOLDER)\b", re.IGNORECASE)
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 FIND_LINE_RE = re.compile(
     r"(?P<skill_ref>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+)"
     r"(?:\s+(?P<installs>[0-9][0-9,._KkMm]*)\s+installs?)?"
@@ -136,6 +146,19 @@ def ensure_parent(path: Path) -> None:
 
 def sanitize(value: str) -> str:
     return " ".join(value.replace("\t", " ").replace("\r", " ").replace("\n", " ").split())
+
+
+def strip_ansi(value: str) -> str:
+    return ANSI_ESCAPE_RE.sub("", value)
+
+
+def extract_keywords(text: str, limit: int = 40) -> list[str]:
+    counter: Counter[str] = Counter()
+    for token in TOKEN_RE.findall(text.lower()):
+        if token in STOPWORDS:
+            continue
+        counter[token] += 1
+    return [token for token, _count in counter.most_common(limit)]
 
 
 def parse_install_count(raw: str | None) -> int:
@@ -265,12 +288,16 @@ def analyze_project(project_root: Path, out: Path) -> None:
     write_tsv(out, ["key", "value"], rows)
 
 
-def collect_find(input_path: Path, out: Path, evidence_url: str = "") -> None:
-    text = input_path.read_text(encoding="utf-8", errors="ignore")
+def parse_find_output_text(
+    text: str,
+    evidence_url: str = "",
+    source_method: str = "find",
+    note_prefix: str = "",
+) -> list[dict[str, object]]:
     best: dict[str, dict[str, object]] = {}
 
-    for line in text.splitlines():
-        line = line.strip()
+    for raw_line in text.splitlines():
+        line = strip_ansi(raw_line).strip()
         if not line:
             continue
         for match in FIND_LINE_RE.finditer(line):
@@ -281,47 +308,63 @@ def collect_find(input_path: Path, out: Path, evidence_url: str = "") -> None:
             skill_ref = match.group("skill_ref")
             installs = parse_install_count(match.group("installs"))
             repo, skill = split_skill_ref(skill_ref)
+            evidence_note = sanitize(line)[:180]
+            if note_prefix:
+                evidence_note = sanitize(f"{note_prefix} | {line}")[:180]
             prev = best.get(skill_ref)
             if prev is None or installs > int(prev["installs"]):
                 best[skill_ref] = {
-                    "source_method": "find",
+                    "source_method": source_method,
                     "source_rank": 0,
                     "skill_ref": skill_ref,
                     "repo": repo,
                     "skill": skill,
                     "installs": installs,
                     "evidence_url": evidence_url,
-                    "evidence_note": sanitize(line)[:180],
+                    "evidence_note": evidence_note,
                 }
 
     rows = sorted(best.values(), key=lambda item: (int(item["installs"]), item["skill_ref"]), reverse=True)
     for idx, row in enumerate(rows, start=1):
         row["source_rank"] = idx
+    return rows
+
+
+def collect_find(input_path: Path, out: Path, evidence_url: str = "") -> None:
+    text = input_path.read_text(encoding="utf-8", errors="ignore")
+    rows = parse_find_output_text(text, evidence_url=evidence_url, source_method="find")
     write_tsv(out, CANDIDATE_HEADER, rows)
 
 
 def collect_popular(input_path: Path, out: Path, evidence_url: str = "") -> None:
     text = input_path.read_text(encoding="utf-8", errors="ignore")
     candidates: dict[str, dict[str, object]] = {}
+    search_spaces = [text]
+    if "\\\"" in text:
+        # Some feeds escape inner JSON with variable slash depth (e.g. \\\", \\\\").
+        normalized_escaped = re.sub(r'\\+"', r'\\"', text)
+        normalized_plain = normalized_escaped.replace('\\"', '"')
+        search_spaces.extend([normalized_escaped, normalized_plain])
 
-    for pattern in POPULAR_PATTERNS:
-        for match in pattern.finditer(text):
-            repo = match.group("repo")
-            skill = match.group("skill")
-            installs = parse_install_count(match.group("installs"))
-            skill_ref = f"{repo}@{skill}"
-            prev = candidates.get(skill_ref)
-            if prev is None or installs > int(prev["installs"]):
-                candidates[skill_ref] = {
-                    "source_method": "popular",
-                    "source_rank": 0,
-                    "skill_ref": skill_ref,
-                    "repo": repo,
-                    "skill": skill,
-                    "installs": installs,
-                    "evidence_url": evidence_url,
-                    "evidence_note": "skills popular feed",
-                }
+    for search_text in search_spaces:
+        for pattern in POPULAR_PATTERNS:
+            for match in pattern.finditer(search_text):
+                repo = match.group("repo")
+                skill = match.group("skill")
+                installs = parse_install_count(match.group("installs"))
+                skill_ref = f"{repo}@{skill}"
+                prev = candidates.get(skill_ref)
+                if prev is None or installs > int(prev["installs"]):
+                    candidates[skill_ref] = {
+                        "source_method": "popular",
+                        "source_rank": 0,
+                        "skill_ref": skill_ref,
+                        "repo": repo,
+                        "skill": skill,
+                        "installs": installs,
+                        "evidence_url": evidence_url,
+                        "evidence_note": "skills popular feed",
+                    }
 
     rows = sorted(candidates.values(), key=lambda item: (int(item["installs"]), item["skill_ref"]), reverse=True)
     for idx, row in enumerate(rows, start=1):
@@ -433,7 +476,7 @@ def merge_candidates(inputs: list[Path], out: Path) -> None:
     write_tsv(out, MERGED_HEADER, output_rows)
 
 
-def parse_frontmatter(text: str) -> tuple[str, str] | None:
+def parse_skill_markdown(text: str) -> tuple[str, str, str] | None:
     match = FRONTMATTER_RE.match(text)
     if not match:
         return None
@@ -449,7 +492,8 @@ def parse_frontmatter(text: str) -> tuple[str, str] | None:
             name = value
         elif key == "description":
             description = value
-    return name, description
+    body = text[match.end() :].strip()
+    return name, description, body
 
 
 def candidate_skill_md_urls(repo: str, skill: str) -> list[str]:
@@ -482,6 +526,9 @@ def validate_content(candidates: Path, out: Path, strict: bool) -> int:
         source_url = ""
         fm_name = ""
         fm_description = ""
+        body_line_count = 0
+        body_char_count = 0
+        content_keywords = ""
         reason = "skill_md_not_found"
 
         for url in candidate_skill_md_urls(repo, skill):
@@ -497,21 +544,31 @@ def validate_content(candidates: Path, out: Path, strict: bool) -> int:
                 reason = "timeout"
                 continue
 
-            parsed = parse_frontmatter(text)
+            parsed = parse_skill_markdown(text)
             if parsed is None:
                 source_url = url
                 content_checked = "true"
                 reason = "missing_frontmatter"
                 continue
 
-            fm_name, fm_description = parsed
+            fm_name, fm_description, body = parsed
             source_url = url
             content_checked = "true"
+            body_char_count = len(body)
+            body_line_count = len([line for line in body.splitlines() if line.strip()])
+            content_keywords = ",".join(extract_keywords(f"{fm_description}\n{body}", limit=40))
+
             if fm_name != skill:
                 reason = "frontmatter_name_mismatch"
                 continue
             if not fm_description.strip():
                 reason = "missing_frontmatter_description"
+                continue
+            if body_char_count < 80 and body_line_count < 3:
+                reason = "skill_body_too_short"
+                continue
+            if BODY_PLACEHOLDER_RE.search(body):
+                reason = "skill_body_has_placeholder"
                 continue
 
             status = "passed"
@@ -531,6 +588,9 @@ def validate_content(candidates: Path, out: Path, strict: bool) -> int:
                 "source_url": source_url,
                 "frontmatter_name": fm_name,
                 "frontmatter_description": fm_description,
+                "body_line_count": body_line_count,
+                "body_char_count": body_char_count,
+                "content_keywords": content_keywords,
                 "reason": reason,
             }
         )
@@ -554,6 +614,457 @@ def load_project_keywords(profile_path: Path | None) -> set[str]:
             if token:
                 keywords.add(token)
     return keywords
+
+
+def load_project_profile_map(profile_path: Path) -> dict[str, str]:
+    profile: dict[str, str] = {}
+    for row in read_table(profile_path):
+        key = row.get("key", "").strip()
+        if not key:
+            continue
+        profile[key] = row.get("value", "").strip()
+    return profile
+
+
+def split_csv_tokens(raw: str) -> list[str]:
+    tokens: list[str] = []
+    for token in raw.split(","):
+        token = token.strip().lower()
+        if not token:
+            continue
+        tokens.append(token)
+    return tokens
+
+
+def dedupe_keep_order(values: Iterable[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = value.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        out.append(normalized)
+    return out
+
+
+def derive_live_queries(
+    profile: dict[str, str],
+    explicit_find_query: str | None,
+    explicit_web_queries: list[str] | None,
+) -> tuple[str, list[str]]:
+    keywords = [
+        token
+        for token in split_csv_tokens(profile.get("top_keywords", ""))
+        if len(token) >= 3 and token not in STOPWORDS
+    ]
+    technologies = split_csv_tokens(profile.get("technologies", ""))
+
+    base_terms = dedupe_keep_order(keywords + technologies)
+    if not base_terms:
+        base_terms = ["software", "engineering", "automation", "testing"]
+
+    find_query = (explicit_find_query or " ".join(base_terms[:4])).strip()
+    if not find_query:
+        find_query = "software engineering automation"
+
+    if explicit_web_queries:
+        web_queries = dedupe_keep_order(explicit_web_queries)
+    else:
+        generated = [find_query]
+        generated.extend(f"{term} agent skills" for term in base_terms[:3])
+        web_queries = dedupe_keep_order(generated)
+    if not web_queries:
+        web_queries = [find_query]
+    return find_query, web_queries
+
+
+def run_find_query(find_command: str, query: str, out: Path) -> None:
+    cmd = shlex.split(find_command)
+    if not cmd:
+        raise RuntimeError("find-command is empty")
+    cmd.append(query)
+
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    text_out = (proc.stdout or "").strip()
+    text_err = (proc.stderr or "").strip()
+    merged_output = text_out
+    if text_err:
+        merged_output = f"{merged_output}\n{text_err}" if merged_output else text_err
+
+    ensure_parent(out)
+    out.write_text((merged_output + "\n") if merged_output else "", encoding="utf-8")
+    if proc.returncode != 0:
+        snippet = sanitize((merged_output or "find command failed")[:240])
+        raise RuntimeError(f"find command failed (exit={proc.returncode}): {snippet}")
+
+
+def fetch_json(url: str, timeout_sec: int = 15) -> object:
+    req = Request(
+        url=url,
+        headers={
+            "User-Agent": "skills-batch-ops/1.0",
+            "Accept": "application/vnd.github+json",
+        },
+    )
+    with urlopen(req, timeout=timeout_sec) as resp:
+        raw = resp.read().decode("utf-8", errors="replace")
+    return json.loads(raw)
+
+
+def discover_repo_skills_from_github(
+    api_base: str,
+    repo: str,
+    timeout_sec: int,
+    max_skills_per_repo: int,
+    branches: list[str] | None = None,
+) -> list[str]:
+    api_base = api_base.rstrip("/")
+    skills: list[str] = []
+    seen: set[str] = set()
+    branch_candidates = dedupe_keep_order((branches or []) + ["main", "master"])
+
+    for branch in branch_candidates:
+        url = f"{api_base}/repos/{repo}/contents/skills?ref={quote_plus(branch)}"
+        try:
+            payload = fetch_json(url, timeout_sec=timeout_sec)
+        except HTTPError as exc:
+            if exc.code == 404:
+                continue
+            raise
+
+        if not isinstance(payload, list):
+            continue
+        for entry in payload:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("type") != "dir":
+                continue
+            name = str(entry.get("name", "")).strip()
+            if not name:
+                continue
+            if name in seen:
+                continue
+            seen.add(name)
+            skills.append(name)
+            if len(skills) >= max_skills_per_repo:
+                return skills
+
+    if skills:
+        return skills
+
+    # Fallback: inspect git tree for any path ending with SKILL.md.
+    for branch in branch_candidates:
+        tree_url = f"{api_base}/repos/{repo}/git/trees/{quote_plus(branch)}?recursive=1"
+        try:
+            payload = fetch_json(tree_url, timeout_sec=timeout_sec)
+        except HTTPError as exc:
+            if exc.code == 404:
+                continue
+            raise
+        if not isinstance(payload, dict):
+            continue
+        tree = payload.get("tree")
+        if not isinstance(tree, list):
+            continue
+
+        for entry in tree:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("type") != "blob":
+                continue
+            path = str(entry.get("path", "")).strip()
+            if not path.endswith("SKILL.md"):
+                continue
+
+            parts = path.split("/")
+            skill_name = ""
+            if path == "SKILL.md":
+                # Root-level SKILL.md: fetch name from frontmatter.
+                raw_url = f"https://raw.githubusercontent.com/{repo}/{branch}/SKILL.md"
+                try:
+                    text = fetch_text(raw_url, timeout_sec=timeout_sec)
+                except HTTPError:
+                    continue
+                except URLError:
+                    continue
+                parsed = parse_skill_markdown(text)
+                if parsed is None:
+                    continue
+                skill_name = parsed[0].strip()
+            elif len(parts) >= 3 and parts[0] == "skills":
+                skill_name = parts[1].strip()
+            elif len(parts) >= 2:
+                skill_name = parts[-2].strip()
+
+            if not skill_name:
+                continue
+            if skill_name in seen:
+                continue
+            seen.add(skill_name)
+            skills.append(skill_name)
+            if len(skills) >= max_skills_per_repo:
+                return skills
+        if skills:
+            return skills
+
+    # Fallback for repositories that expose a single root-level SKILL.md.
+    for branch in branch_candidates:
+        raw_url = f"https://raw.githubusercontent.com/{repo}/{branch}/SKILL.md"
+        try:
+            text = fetch_text(raw_url, timeout_sec=timeout_sec)
+        except HTTPError as exc:
+            if exc.code == 404:
+                continue
+            raise
+        except URLError:
+            continue
+        parsed = parse_skill_markdown(text)
+        if parsed is None:
+            continue
+        name = parsed[0].strip()
+        if not name:
+            continue
+        if name not in seen:
+            skills.append(name)
+        break
+
+    return skills[:max_skills_per_repo]
+
+
+def collect_web_candidates_from_github(
+    web_queries: list[str],
+    out: Path,
+    api_base: str,
+    repo_limit: int,
+    skill_limit_per_repo: int,
+    timeout_sec: int,
+) -> None:
+    api_base = api_base.rstrip("/")
+    per_page = max(1, min(repo_limit, 100))
+    rows_by_skill_ref: dict[str, dict[str, object]] = {}
+    seen_repos: set[str] = set()
+
+    for query in web_queries:
+        search_query = f"{query} skills in:name,description,readme archived:false"
+        url = (
+            f"{api_base}/search/repositories"
+            f"?q={quote_plus(search_query)}&sort=stars&order=desc&per_page={per_page}"
+        )
+        payload = fetch_json(url, timeout_sec=timeout_sec)
+        if not isinstance(payload, dict):
+            continue
+        items = payload.get("items")
+        if not isinstance(items, list):
+            continue
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            repo = str(item.get("full_name", "")).strip()
+            if not repo or repo in seen_repos:
+                continue
+            seen_repos.add(repo)
+
+            stars = int(item.get("stargazers_count") or 0)
+            default_branch = str(item.get("default_branch", "")).strip()
+            repo_url = str(item.get("html_url", f"https://github.com/{repo}")).strip()
+            try:
+                skills = discover_repo_skills_from_github(
+                    api_base=api_base,
+                    repo=repo,
+                    timeout_sec=timeout_sec,
+                    max_skills_per_repo=max(1, skill_limit_per_repo),
+                    branches=[default_branch] if default_branch else None,
+                )
+            except HTTPError:
+                continue
+            except URLError:
+                continue
+
+            for skill in skills:
+                skill_ref = f"{repo}@{skill}"
+                if not SKILL_REF_RE.match(skill_ref):
+                    continue
+                note = sanitize(f"github_search query={query} stars={stars}")[:180]
+                row = rows_by_skill_ref.get(skill_ref)
+                if row is None or stars > int(row["installs"]):
+                    rows_by_skill_ref[skill_ref] = {
+                        "skill_ref": skill_ref,
+                        "repo": repo,
+                        "skill": skill,
+                        "installs": stars,
+                        "evidence_url": repo_url,
+                        "evidence_note": note,
+                    }
+
+            if len(seen_repos) >= repo_limit:
+                break
+        if len(seen_repos) >= repo_limit:
+            break
+
+    output_rows = sorted(
+        rows_by_skill_ref.values(),
+        key=lambda item: (int(item["installs"]), item["skill_ref"]),
+        reverse=True,
+    )
+    write_tsv(
+        out,
+        ["skill_ref", "repo", "skill", "installs", "evidence_url", "evidence_note"],
+        output_rows,
+    )
+
+
+def collect_web_candidates_via_find(
+    web_queries: list[str],
+    out: Path,
+    find_command: str,
+) -> None:
+    rows_by_skill_ref: dict[str, dict[str, object]] = {}
+
+    for query in web_queries:
+        cmd = shlex.split(find_command)
+        if not cmd:
+            raise RuntimeError("find-command is empty")
+        cmd.append(query)
+
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if proc.returncode != 0:
+            continue
+        evidence_url = f"https://skills.sh/?q={quote_plus(query)}"
+        parsed_rows = parse_find_output_text(
+            proc.stdout or "",
+            evidence_url=evidence_url,
+            source_method="web",
+            note_prefix=f"web_query={query}",
+        )
+        for row in parsed_rows:
+            skill_ref = str(row.get("skill_ref", ""))
+            if not skill_ref:
+                continue
+            current = rows_by_skill_ref.get(skill_ref)
+            installs = int(row.get("installs", 0) or 0)
+            if current is None or installs > int(current["installs"]):
+                rows_by_skill_ref[skill_ref] = {
+                    "skill_ref": skill_ref,
+                    "repo": row.get("repo", ""),
+                    "skill": row.get("skill", ""),
+                    "installs": installs,
+                    "evidence_url": row.get("evidence_url", evidence_url),
+                    "evidence_note": row.get("evidence_note", ""),
+                }
+
+    output_rows = sorted(
+        rows_by_skill_ref.values(),
+        key=lambda item: (int(item["installs"]), item["skill_ref"]),
+        reverse=True,
+    )
+    write_tsv(
+        out,
+        ["skill_ref", "repo", "skill", "installs", "evidence_url", "evidence_note"],
+        output_rows,
+    )
+
+
+def collect_sources_live(args: argparse.Namespace) -> int:
+    project_root = Path(args.project_root).resolve()
+    run_dir = Path(args.run_dir).resolve()
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    project_profile = run_dir / "project_profile.tsv"
+    find_output = Path(args.find_output).resolve() if args.find_output else run_dir / "find_output.txt"
+    popular_output = Path(args.popular_output).resolve() if args.popular_output else run_dir / "popular_output.html"
+    web_output = Path(args.web_output).resolve() if args.web_output else run_dir / "web_candidates.tsv"
+
+    candidates_find = run_dir / "candidates.find.tsv"
+    candidates_popular = run_dir / "candidates.popular.tsv"
+    candidates_web = run_dir / "candidates.web.tsv"
+
+    analyze_project(project_root, project_profile)
+    profile = load_project_profile_map(project_profile)
+    find_query, web_queries = derive_live_queries(profile, args.find_query, args.web_query)
+
+    find_evidence_url = args.find_evidence_url.strip() or f"https://skills.sh/?q={quote_plus(find_query)}"
+    run_find_query(args.find_command, find_query, find_output)
+    collect_find(find_output, candidates_find, evidence_url=find_evidence_url)
+
+    popular_html = fetch_text(args.popular_url, timeout_sec=max(args.timeout_sec, 5))
+    ensure_parent(popular_output)
+    popular_output.write_text(popular_html, encoding="utf-8")
+    collect_popular(popular_output, candidates_popular, evidence_url=args.popular_url)
+
+    if args.web_mode == "seed":
+        if not args.web_seed_input:
+            raise RuntimeError("--web-seed-input is required when --web-mode seed")
+        seed_path = Path(args.web_seed_input).resolve()
+        if not seed_path.exists():
+            raise FileNotFoundError(f"web seed input not found: {seed_path}")
+        ensure_parent(web_output)
+        shutil.copyfile(seed_path, web_output)
+    else:
+        collect_web_candidates_from_github(
+            web_queries=web_queries,
+            out=web_output,
+            api_base=args.github_api_base,
+            repo_limit=max(args.web_repo_limit, 1),
+            skill_limit_per_repo=max(args.web_skill_limit_per_repo, 1),
+            timeout_sec=max(args.timeout_sec, 5),
+        )
+        if len(read_table(web_output)) == 0:
+            collect_web_candidates_via_find(
+                web_queries=web_queries,
+                out=web_output,
+                find_command=args.find_command,
+            )
+
+    collect_web(web_output, candidates_web)
+    source_counts = {
+        "find": len(read_table(candidates_find)),
+        "popular": len(read_table(candidates_popular)),
+        "web": len(read_table(candidates_web)),
+    }
+    if not args.allow_empty_sources:
+        empty_sources = [name for name, count in source_counts.items() if count == 0]
+        if empty_sources:
+            joined = ", ".join(empty_sources)
+            raise RuntimeError(
+                f"empty source(s) after live collection: {joined}. "
+                "Use better queries or pass --allow-empty-sources."
+            )
+
+    print(f"run_dir: {run_dir}")
+    print(f"project_profile: {project_profile}")
+    print(f"find_query: {find_query}")
+    print(f"web_queries: {', '.join(web_queries)}")
+    print(
+        "source_counts: "
+        f"find={source_counts['find']},popular={source_counts['popular']},web={source_counts['web']}"
+    )
+    print(f"find_output: {find_output}")
+    print(f"popular_output: {popular_output}")
+    print(f"web_output: {web_output}")
+    print(f"candidates_find: {candidates_find}")
+    print(f"candidates_popular: {candidates_popular}")
+    print(f"candidates_web: {candidates_web}")
+
+    if not args.run_after_collect:
+        return 0
+
+    run_args = SimpleNamespace(
+        project_root=str(project_root),
+        run_dir=str(run_dir),
+        find_input=str(find_output),
+        popular_input=str(popular_output),
+        web_input=str(web_output),
+        find_evidence_url=find_evidence_url,
+        popular_evidence_url=args.popular_url,
+        min_methods=max(args.min_methods, 1),
+        limit=max(args.limit, 1),
+        dry_run=bool(args.dry_run),
+        no_yes=bool(args.no_yes),
+        allow_empty_sources=bool(args.allow_empty_sources),
+    )
+    return run_pipeline(run_args)
 
 
 def build_manifest(
@@ -581,8 +1092,16 @@ def build_manifest(
         content_status = content.get("content_status", "failed")
 
         skill_tokens = {token.lower() for token in re.split(r"[-_.]", skill) if token}
-        keyword_match = "true" if project_keywords.intersection(skill_tokens) else "false"
-        score = method_count * 100 + min(installs_max, 500_000) // 5_000 + (20 if keyword_match == "true" else 0)
+        content_tokens = {
+            token.strip().lower()
+            for token in content.get("content_keywords", "").split(",")
+            if token.strip()
+        }
+        keyword_hits = sorted(project_keywords.intersection(skill_tokens.union(content_tokens)))
+        keyword_match = "true" if keyword_hits else "false"
+        keyword_hits_value = ",".join(keyword_hits[:20])
+        relevance_bonus = min(len(keyword_hits), 5) * 12
+        score = method_count * 100 + min(installs_max, 500_000) // 5_000 + relevance_bonus
 
         if content_status != "passed":
             manifest_status = "rejected"
@@ -591,7 +1110,18 @@ def build_manifest(
         elif method_count >= min_methods:
             manifest_status = "approved"
             decision = "approve"
-            rationale = f"content verified and discovered by {method_count} methods"
+            if keyword_hits:
+                rationale = (
+                    f"content verified, discovered by {method_count} methods, "
+                    f"project keyword hits: {', '.join(keyword_hits[:5])}"
+                )
+            elif project_keywords:
+                rationale = (
+                    f"content verified and discovered by {method_count} methods "
+                    "(no direct project keyword overlap)"
+                )
+            else:
+                rationale = f"content verified and discovered by {method_count} methods"
         else:
             manifest_status = "pending"
             decision = "hold"
@@ -607,6 +1137,7 @@ def build_manifest(
                 "installs_max": installs_max,
                 "content_status": content_status,
                 "project_keyword_match": keyword_match,
+                "project_keyword_hits": keyword_hits_value,
                 "score": score,
                 "manifest_status": manifest_status,
                 "status": manifest_status,
@@ -740,6 +1271,19 @@ def run_pipeline(args: argparse.Namespace) -> int:
     collect_find(find_input, find_out, args.find_evidence_url)
     collect_popular(popular_input, popular_out, args.popular_evidence_url)
     collect_web(web_input, web_out)
+    source_counts = {
+        "find": len(read_table(find_out)),
+        "popular": len(read_table(popular_out)),
+        "web": len(read_table(web_out)),
+    }
+    if not args.allow_empty_sources:
+        empty_sources = [name for name, count in source_counts.items() if count == 0]
+        if empty_sources:
+            joined = ", ".join(empty_sources)
+            raise RuntimeError(
+                f"empty candidate source(s): {joined}. "
+                "Provide data for all three methods or pass --allow-empty-sources."
+            )
     merge_candidates([find_out, popular_out, web_out], merged_out)
 
     validate_rc = validate_content(merged_out, content_out, strict=False)
@@ -758,6 +1302,10 @@ def run_pipeline(args: argparse.Namespace) -> int:
     install_rc = install_manifest(manifest_out, install_out, dry_run=args.dry_run, yes=not args.no_yes)
     print(f"run_dir: {run_dir}")
     print(f"project_profile: {project_profile}")
+    print(
+        "source_counts: "
+        f"find={source_counts['find']},popular={source_counts['popular']},web={source_counts['web']}"
+    )
     print(f"merged_candidates: {merged_out}")
     print(f"content_report: {content_out}")
     print(f"manifest: {manifest_out}")
@@ -825,6 +1373,38 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     run_cmd.add_argument("--limit", type=int, default=8)
     run_cmd.add_argument("--dry-run", action="store_true")
     run_cmd.add_argument("--no-yes", action="store_true")
+    run_cmd.add_argument(
+        "--allow-empty-sources",
+        action="store_true",
+        help="allow run completion when one or more source candidate lists are empty",
+    )
+
+    live_cmd = sub.add_parser(
+        "collect-sources-live",
+        help="collect find/popular/web source files automatically",
+    )
+    live_cmd.add_argument("--project-root", required=True)
+    live_cmd.add_argument("--run-dir", required=True)
+    live_cmd.add_argument("--find-query")
+    live_cmd.add_argument("--web-query", action="append", default=[])
+    live_cmd.add_argument("--find-command", default="npx skills find")
+    live_cmd.add_argument("--find-evidence-url", default="")
+    live_cmd.add_argument("--popular-url", default="https://skills.sh/")
+    live_cmd.add_argument("--github-api-base", default="https://api.github.com")
+    live_cmd.add_argument("--web-mode", choices=["github", "seed"], default="github")
+    live_cmd.add_argument("--web-seed-input")
+    live_cmd.add_argument("--web-repo-limit", type=int, default=18)
+    live_cmd.add_argument("--web-skill-limit-per-repo", type=int, default=6)
+    live_cmd.add_argument("--timeout-sec", type=int, default=15)
+    live_cmd.add_argument("--find-output")
+    live_cmd.add_argument("--popular-output")
+    live_cmd.add_argument("--web-output")
+    live_cmd.add_argument("--allow-empty-sources", action="store_true")
+    live_cmd.add_argument("--run-after-collect", action="store_true")
+    live_cmd.add_argument("--min-methods", type=int, default=2)
+    live_cmd.add_argument("--limit", type=int, default=8)
+    live_cmd.add_argument("--dry-run", action="store_true")
+    live_cmd.add_argument("--no-yes", action="store_true")
 
     return parser.parse_args(argv)
 
@@ -868,6 +1448,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.subcommand == "run":
         return run_pipeline(args)
+    if args.subcommand == "collect-sources-live":
+        return collect_sources_live(args)
     raise RuntimeError(f"unknown subcommand: {args.subcommand}")
 
 

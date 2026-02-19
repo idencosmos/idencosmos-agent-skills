@@ -1,6 +1,6 @@
 ---
 name: skills-batch-ops
-description: 프로젝트 분석 후 find-skills, 인기/사용량 기반 후보, 인터넷 검색 후보를 함께 수집하고, 각 후보의 실제 SKILL.md 내용을 검증한 뒤 승인 항목만 설치합니다. 멀티소스 탐색+내용 검토+설치를 한 번에 실행할 때 사용합니다.
+description: 프로젝트에 맞는 스킬을 찾아 설치해야 할 때 사용합니다. 프로젝트 분석 후 (1) find-skills 결과, (2) 인기/사용량 기반 후보, (3) 인터넷 검색 후보를 함께 수집하고, 후보별 실제 SKILL.md 본문까지 검토한 뒤 승인 항목만 설치합니다.
 ---
 
 # Skills Batch Ops
@@ -18,6 +18,7 @@ description: 프로젝트 분석 후 find-skills, 인기/사용량 기반 후보
 - 3개 탐색 채널(`find`, `popular`, `web`)을 모두 사용합니다.
 - 이름만으로 설치하지 않고 반드시 `SKILL.md` 실체를 검증합니다.
 - 설치 전에는 기본적으로 `--dry-run`을 먼저 실행합니다.
+- 기본 `run`은 3개 채널 중 하나라도 비어 있으면 실패합니다. 예외가 필요할 때만 `--allow-empty-sources`를 사용합니다.
 
 ## Script Path
 
@@ -34,7 +35,7 @@ fi
 
 ## Quick Start (End-to-End)
 
-아래 예시는 1~6단계를 한 번에 실행합니다.
+아래 예시는 1~6단계를 한 번에 실행합니다. 실행 전에 2~4단계 입력 파일(`find_output.txt`, `popular_output.html`, `web_candidates.tsv`)을 먼저 준비하세요.
 
 ```bash
 RUN_DIR=".agents/skills-batch-ops/runs/$(date -u +%Y%m%d_%H%M%S)"
@@ -46,6 +47,18 @@ python3 "$SBP_SCRIPT" run \
   --find-input "$RUN_DIR/find_output.txt" \
   --popular-input "$RUN_DIR/popular_output.html" \
   --web-input "$RUN_DIR/web_candidates.tsv" \
+  --min-methods 2 \
+  --limit 8 \
+  --dry-run
+```
+
+라이브 수집(2~4단계 자동화)부터 설치 전 dry-run까지 한 번에 하려면:
+
+```bash
+python3 "$SBP_SCRIPT" collect-sources-live \
+  --project-root "$(pwd)" \
+  --run-dir "$RUN_DIR" \
+  --run-after-collect \
   --min-methods 2 \
   --limit 8 \
   --dry-run
@@ -66,10 +79,12 @@ python3 "$SBP_SCRIPT" run \
 ### `--find-input`
 - `find-skills` 실행 결과 텍스트 파일.
 - 라인 중 `owner/repo@skill` 패턴과 `installs` 수치를 자동 추출합니다.
+- `find-skills` 실행 로그 원문을 그대로 저장하는 것을 권장합니다.
 
 ### `--popular-input`
 - 인기 스킬 페이지 HTML/텍스트 덤프 파일.
 - `source`, `skillId`, `installs` 필드를 파싱합니다.
+- `installs`가 있는 공개 인기 목록(사용량/인지도 지표)을 사용하세요.
 
 ### `--web-input`
 - 인터넷 검색 결과를 정리한 TSV/CSV 파일.
@@ -81,8 +96,50 @@ vercel-labs/skills@find-skills	vercel-labs/skills	find-skills	238456	https://...
 ```
 
 - `skill_ref`만 있어도 되고, `repo+skill` 조합으로도 입력할 수 있습니다.
+- `evidence_url`은 실제 근거 페이지 URL을 기록하고, `evidence_note`에는 왜 프로젝트에 맞는지 한 줄 근거를 남깁니다.
+
+## Source Collection Checklist (2~4단계)
+
+1. `find-skills` 결과 확보:
+- 프로젝트 요구를 기준으로 `find-skills`를 실행해 raw 결과를 `find_output.txt`에 저장합니다.
+
+2. 인기/사용량 기반 후보 확보:
+- 공개 인기 목록에서 후보를 수집해 `popular_output.html`(또는 text dump)로 저장합니다.
+
+3. 인터넷 검색 기반 후보 확보:
+- 검색 결과를 `web_candidates.tsv`로 정규화하며, 각 행에 `evidence_url`을 채웁니다.
+
+4. 최소 품질 조건:
+- `find/popular/web` 3채널을 모두 채웁니다.
+- 후보마다 `owner/repo@skill` 식별이 가능해야 합니다.
 
 ## Commands
+
+### `collect-sources-live` (신규)
+
+```bash
+python3 "$SBP_SCRIPT" collect-sources-live \
+  --project-root "$(pwd)" \
+  --run-dir "$RUN_DIR"
+```
+
+자동 수행 항목:
+
+1. 프로젝트 분석(`project_profile.tsv`)
+2. `npx skills find <query>` 실행 후 `find_output.txt` 생성
+3. `https://skills.sh/` 수집 후 `popular_output.html` 생성
+4. GitHub 검색 API 기반 인터넷 후보 `web_candidates.tsv` 생성
+5. `candidates.find.tsv`, `candidates.popular.tsv`, `candidates.web.tsv`까지 정규화
+
+주요 옵션:
+
+- `--find-query`: find 검색어 고정
+- `--web-query`: 웹 검색어 추가(여러 번 지정 가능)
+- `--find-command`: find 실행 명령 커스터마이즈 (기본 `npx skills find`)
+- `--web-mode seed --web-seed-input <path>`: 인터넷 검색 대신 사전 정리 TSV 사용(오프라인/테스트용)
+- 기본 `web-mode=github`에서 GitHub API 후보가 0건이면 `skills find` 기반 웹 후보 수집으로 자동 fallback합니다.
+- `--allow-empty-sources`: 비어 있는 채널 허용
+- `--run-after-collect`: 수집 직후 `run` 단계 자동 실행
 
 ### `analyze-project`
 
@@ -137,6 +194,12 @@ python3 "$SBP_SCRIPT" validate-content \
 ```
 
 각 후보의 원격 저장소에서 `SKILL.md`를 가져와 frontmatter(`name`, `description`)를 점검합니다.
+검증은 이름 확인을 넘어서 본문 품질도 함께 확인합니다.
+
+- frontmatter `name` / `description` 유효성
+- 본문 길이(너무 짧은 문서 차단)
+- 본문 placeholder(TODO/TBD/PLACEHOLDER) 포함 여부
+- 본문 기반 `content_keywords` 추출 (프로젝트 키워드 매칭용)
 
 ### `build-manifest`
 
@@ -151,6 +214,7 @@ python3 "$SBP_SCRIPT" build-manifest \
 ```
 
 `content_status=passed` + 멀티소스 조건(`min_methods`)을 만족한 항목만 `approved`로 생성합니다.
+`project_keyword_hits`는 프로젝트 키워드와 스킬 본문/설명 기반 매칭 근거를 제공합니다.
 
 ### `install-manifest`
 
@@ -167,6 +231,7 @@ python3 "$SBP_SCRIPT" install-manifest \
 
 - `SKILL.md` 검증 실패(`content_status!=passed`)는 `rejected`.
 - 검증 통과 + `method_count >= min_methods`만 `approved`.
+- `project_keyword_hits`는 우선순위 점수(`score`)에 반영됩니다.
 - `limit` 초과 승인 후보는 `pending`으로 조정합니다.
 
 ## Legacy Gate-Only Script
