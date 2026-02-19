@@ -152,6 +152,10 @@ def strip_ansi(value: str) -> str:
     return ANSI_ESCAPE_RE.sub("", value)
 
 
+def normalize_newlines(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def extract_keywords(text: str, limit: int = 40) -> list[str]:
     counter: Counter[str] = Counter()
     for token in TOKEN_RE.findall(text.lower()):
@@ -477,7 +481,8 @@ def merge_candidates(inputs: list[Path], out: Path) -> None:
 
 
 def parse_skill_markdown(text: str) -> tuple[str, str, str] | None:
-    match = FRONTMATTER_RE.match(text)
+    normalized = normalize_newlines(text)
+    match = FRONTMATTER_RE.match(normalized)
     if not match:
         return None
     name = ""
@@ -492,12 +497,14 @@ def parse_skill_markdown(text: str) -> tuple[str, str, str] | None:
             name = value
         elif key == "description":
             description = value
-    body = text[match.end() :].strip()
+    body = normalized[match.end() :].strip()
     return name, description, body
 
 
 def candidate_skill_md_urls(repo: str, skill: str) -> list[str]:
     return [
+        f"https://raw.githubusercontent.com/{repo}/main/SKILL.md",
+        f"https://raw.githubusercontent.com/{repo}/master/SKILL.md",
         f"https://raw.githubusercontent.com/{repo}/main/skills/{skill}/SKILL.md",
         f"https://raw.githubusercontent.com/{repo}/master/skills/{skill}/SKILL.md",
         f"https://raw.githubusercontent.com/{repo}/main/{skill}/SKILL.md",

@@ -233,11 +233,46 @@ TSV
   assert_contains "$tmp/review_manifest.keyword-optional.tsv" $'\tapproved\tapproved\tapprove\t' || return 1
 }
 
+test_parser_root_skill_and_crlf_support_process() {
+  local tmp
+  tmp="$(mktemp -d)"
+
+  PIPELINE_SCRIPT_PATH="$PIPELINE_SCRIPT" python3 - > "$tmp/parser_check.txt" <<'PY'
+import importlib.util
+import os
+from pathlib import Path
+
+script_path = Path(os.environ["PIPELINE_SCRIPT_PATH"]).resolve()
+spec = importlib.util.spec_from_file_location("skills_batch_pipeline", script_path)
+if spec is None or spec.loader is None:
+    raise RuntimeError("failed to load skills_batch_pipeline module")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+urls = module.candidate_skill_md_urls("example/repo", "skill-alpha")
+assert urls[0] == "https://raw.githubusercontent.com/example/repo/main/SKILL.md"
+assert urls[1] == "https://raw.githubusercontent.com/example/repo/master/SKILL.md"
+
+parsed = module.parse_skill_markdown(
+    "---\r\nname: skill-alpha\r\ndescription: Demo skill\r\n---\r\n# Heading\r\n\r\nBody line.\r\n"
+)
+assert parsed is not None
+name, description, body = parsed
+assert name == "skill-alpha"
+assert description == "Demo skill"
+assert "Body line." in body
+print("ok")
+PY
+
+  assert_contains "$tmp/parser_check.txt" "ok" || return 1
+}
+
 log "## Pipeline Suite"
 run_test "collect-find/popular/web + merge" test_collect_and_merge_process
 run_test "collect-sources-live seed mode" test_collect_sources_live_seed_process
 run_test "build-manifest + install-manifest dry-run" test_manifest_and_install_dry_run_process
 run_test "build-manifest project keyword gate" test_manifest_project_keyword_gate_process
+run_test "parser root SKILL.md + CRLF support" test_parser_root_skill_and_crlf_support_process
 
 log ""
 log "summary: pass=$pass fail=$fail"

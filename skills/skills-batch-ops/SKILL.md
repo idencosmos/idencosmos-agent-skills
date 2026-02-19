@@ -105,6 +105,7 @@ vercel-labs/skills@find-skills	vercel-labs/skills	find-skills	238456	https://...
 
 1. `find-skills` 결과 확보:
 - 프로젝트 요구를 기준으로 `find-skills`를 실행해 raw 결과를 `find_output.txt`에 저장합니다.
+- 기본 명령은 `npx skills find "<project query>"`이며, `vercel-labs/skills@find-skills` 계열 출력 포맷(`owner/repo@skill`, installs)을 그대로 보존합니다.
 
 2. 인기/사용량 기반 후보 확보:
 - 공개 인기 목록에서 후보를 수집해 `popular_output.html`(또는 text dump)로 저장합니다.
@@ -199,6 +200,8 @@ python3 "$SBP_SCRIPT" validate-content \
 
 각 후보의 원격 저장소에서 `SKILL.md`를 가져와 frontmatter(`name`, `description`)를 점검합니다.
 검증은 이름 확인을 넘어서 본문 품질도 함께 확인합니다.
+
+- 경로 후보: `main|master` 브랜치의 `/SKILL.md`, `/skills/<skill>/SKILL.md`, `/<skill>/SKILL.md`
 
 - frontmatter `name` / `description` 유효성
 - 본문 길이(너무 짧은 문서 차단)
