@@ -171,8 +171,8 @@ validate_plan_schema() {
     [[ -n "$developer_instructions" ]] || die "plan row $line_no: developer_instructions is required"
     [[ -n "$model" ]] || die "plan row $line_no: model is required"
     case "$model_reasoning_effort" in
-      low|medium|high) ;;
-      *) die "plan row $line_no: model_reasoning_effort must be one of low|medium|high" ;;
+      minimal|low|medium|high|xhigh) ;;
+      *) die "plan row $line_no: model_reasoning_effort must be one of minimal|low|medium|high|xhigh" ;;
     esac
     case "$sandbox_mode" in
       read-only|workspace-write|danger-full-access) ;;
@@ -268,7 +268,7 @@ build_managed_block() {
         continue
       fi
       safe_config_relpath="$(validate_agent_config_relpath "$config_relpath")"
-      printf '\n[agents.%s]\n' "$agent_id"
+      printf '\n[agents."%s"]\n' "$(toml_escape_basic_string "$agent_id")"
       printf 'description = "%s"\n' "$(toml_escape_basic_string "$(sanitize_field "$description")")"
       printf 'config_file = "%s"\n' "$safe_config_relpath"
     done < "$plan"
@@ -343,6 +343,82 @@ replace_managed_block() {
   cat "$managed_block" >> "$config_file"
 }
 
+ensure_multi_agent_feature_enabled() {
+  local config_file="$1"
+  local report="$2"
+  local tmp
+
+  tmp="$(mktemp)"
+
+  awk '
+    function is_table_header(line) {
+      return line ~ /^[[:space:]]*\[[^]]+\][[:space:]]*$/
+    }
+    function is_features_header(line) {
+      return line ~ /^[[:space:]]*\[features\][[:space:]]*$/
+    }
+    function maybe_emit_feature_key() {
+      if (in_features == 1 && current_features_has_multi == 0 && emitted_multi == 0) {
+        print "multi_agent = true"
+        emitted_multi = 1
+      }
+    }
+    BEGIN {
+      in_features = 0
+      seen_features_table = 0
+      current_features_has_multi = 0
+      emitted_multi = 0
+      has_lines = 0
+    }
+    {
+      line = $0
+      has_lines = 1
+
+      if (is_table_header(line)) {
+        maybe_emit_feature_key()
+        in_features = 0
+        current_features_has_multi = 0
+        if (is_features_header(line)) {
+          in_features = 1
+          seen_features_table = 1
+        }
+        print line
+        next
+      }
+
+      if (in_features == 1 && line ~ /^[[:space:]]*multi_agent[[:space:]]*=/) {
+        if (emitted_multi == 0) {
+          print "multi_agent = true"
+          emitted_multi = 1
+          current_features_has_multi = 1
+        }
+        next
+      }
+
+      print line
+    }
+    END {
+      maybe_emit_feature_key()
+      if (seen_features_table == 0) {
+        if (has_lines == 1) {
+          print ""
+        }
+        print "[features]"
+        print "multi_agent = true"
+      }
+    }
+  ' "$config_file" > "$tmp"
+
+  if cmp -s "$config_file" "$tmp"; then
+    rm -f "$tmp"
+    append_apply_report "$report" "enable_multi_agent_feature" "$config_file" "ok" "features.multi_agent already enabled"
+    return
+  fi
+
+  mv "$tmp" "$config_file"
+  append_apply_report "$report" "enable_multi_agent_feature" "$config_file" "updated" "ensure features.multi_agent = true"
+}
+
 render_config() {
   local project_root="$1"
   local plan="$2"
@@ -413,6 +489,7 @@ render_config() {
   ensure_parent_dir "$config_file"
   replace_managed_block "$config_file" "$managed_block"
   append_apply_report "$report" "write_config_block" "$config_file" "$managed_status" "managed block synced"
+  ensure_multi_agent_feature_enabled "$config_file" "$report"
 
   rm -f "$planned_agent_files"
   rm -f "$managed_block"
@@ -504,6 +581,7 @@ parse_apply_plan_args() {
 
 main() {
   require_cmd awk
+  require_cmd cmp
   require_cmd find
   require_cmd head
   require_cmd rg

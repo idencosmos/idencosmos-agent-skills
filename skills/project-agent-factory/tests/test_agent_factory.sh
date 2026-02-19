@@ -19,7 +19,7 @@ mkdir -p "$run_dir"
 cat > "$run_dir/agent_plan.tsv" <<'TSV'
 agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
 paf_explorer	Project Explorer	10	context	agents/paf_explorer.toml	Explore project structure.	Collect evidence-backed architecture notes.	gpt-5	medium	workspace-write
-paf_implementer	Project Implementer	20	delivery	agents/paf_implementer.toml	Implement requested changes.	Apply scoped edits and run available checks.	gpt-5-codex	high	danger-full-access
+paf.implementer	Project Implementer	20	delivery	agents/paf_implementer.toml	Implement requested changes.	Apply scoped edits and run available checks.	gpt-5-codex	xhigh	danger-full-access
 TSV
 
 bash "$SCRIPT_PATH" apply-plan \
@@ -36,10 +36,11 @@ bash "$SCRIPT_PATH" apply-plan \
 [[ ! -f "$run_dir/project_profile.tsv" ]]
 
 rg -q "^# BEGIN project-agent-factory managed agents$" "$project_root/.codex/config.toml"
-rg -q "^\[agents.paf_explorer\]$" "$project_root/.codex/config.toml"
-rg -q "^\[agents.paf_implementer\]$" "$project_root/.codex/config.toml"
+rg -q '^\[agents."paf_explorer"\]$' "$project_root/.codex/config.toml"
+rg -q '^\[agents."paf.implementer"\]$' "$project_root/.codex/config.toml"
+rg -q '^multi_agent = true$' "$project_root/.codex/config.toml"
 rg -q 'model = "gpt-5-codex"' "$project_root/.codex/agents/paf_implementer.toml"
-rg -q 'model_reasoning_effort = "high"' "$project_root/.codex/agents/paf_implementer.toml"
+rg -q 'model_reasoning_effort = "xhigh"' "$project_root/.codex/agents/paf_implementer.toml"
 rg -q 'sandbox_mode = "danger-full-access"' "$project_root/.codex/agents/paf_implementer.toml"
 rg -q 'Do not write outside the project root\.' "$project_root/.codex/agents/paf_implementer.toml"
 
@@ -59,7 +60,7 @@ bash "$SCRIPT_PATH" apply-plan \
 [[ -f "$project_root/.codex/agents/paf_explorer.toml" ]]
 [[ ! -f "$project_root/.codex/agents/paf_implementer.toml" ]]
 rg -q 'remove_stale_agent_config.*paf_implementer.toml.*removed' "$reduced_run_dir/apply_report.tsv"
-if rg -q "^\[agents.paf_implementer\]$" "$project_root/.codex/config.toml"; then
+if rg -q '^\[agents."paf.implementer"\]$' "$project_root/.codex/config.toml"; then
   echo "error: stale implementer block should have been removed" >&2
   exit 1
 fi
@@ -214,5 +215,35 @@ if bash "$SCRIPT_PATH" apply-plan \
 fi
 
 rg -q '^keep_after = true$' "$corrupt_root/.codex/config.toml"
+
+# apply-plan should force-enable features.multi_agent while preserving other feature keys
+feature_root="$tmp_dir/feature-flag"
+mkdir -p "$feature_root/.codex"
+cat > "$feature_root/.codex/config.toml" <<'TOML'
+[features]
+multi_agent = false
+experimental_use_rmcp_client = true
+
+[workspace_write]
+network_access = true
+TOML
+
+cat > "$feature_root/plan.tsv" <<'TSV'
+agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
+paf_explorer	Project Explorer	10	feature	agents/paf_explorer.toml	Explore project structure.	Collect evidence-backed architecture notes.	gpt-5	minimal	workspace-write
+TSV
+
+feature_run_dir="$feature_root/.agents/project-agent-factory/runs/feature"
+bash "$SCRIPT_PATH" apply-plan \
+  --project-root "$feature_root" \
+  --plan "$feature_root/plan.tsv" \
+  --out-dir "$feature_run_dir" >/dev/null
+
+rg -q '^multi_agent = true$' "$feature_root/.codex/config.toml"
+rg -q '^experimental_use_rmcp_client = true$' "$feature_root/.codex/config.toml"
+rg -q '^\[workspace_write\]$' "$feature_root/.codex/config.toml"
+rg -q '^network_access = true$' "$feature_root/.codex/config.toml"
+rg -q 'model_reasoning_effort = "minimal"' "$feature_root/.codex/agents/paf_explorer.toml"
+rg -q 'enable_multi_agent_feature.*updated.*ensure features.multi_agent = true' "$feature_run_dir/apply_report.tsv"
 
 echo "ok: project-agent-factory smoke test passed"

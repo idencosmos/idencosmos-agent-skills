@@ -10,6 +10,7 @@ description: AI가 생성한 agent_plan.tsv를 엄격 검증한 뒤 프로젝트
 
 핵심 가드레일을 유지하세요:
 - 생성/갱신 경로를 `<project-root>/.codex/` 하위로 강제
+- `features.multi_agent = true`를 자동 보장하여 에이전트 실행 조건 충족
 - 실행 산출물을 `<project-root>/.agents/project-agent-factory/runs/<timestamp>/`에 기록
 - 기존 `.codex/config.toml` 전체를 덮어쓰지 않고 관리 블록만 갱신
 - `agent_plan.tsv` 스키마를 엄격 검증(필수 컬럼/빈 값/중복/허용값)
@@ -22,7 +23,7 @@ description: AI가 생성한 agent_plan.tsv를 엄격 검증한 뒤 프로젝트
 
 ## Preflight
 
-- 필수 명령이 있는지 먼저 확인하세요: `bash`, `awk`, `find`, `head`, `rg`, `sort`
+- 필수 명령이 있는지 먼저 확인하세요: `bash`, `awk`, `cmp`, `find`, `head`, `rg`, `sort`
 - 아래처럼 `PAF_SCRIPT`를 먼저 해석한 뒤 실행하세요.
 
 ## Quick Start
@@ -31,6 +32,9 @@ description: AI가 생성한 agent_plan.tsv를 엄격 검증한 뒤 프로젝트
 PAF_SCRIPT="${PAF_SCRIPT:-$HOME/.agents/skills/project-agent-factory/scripts/agent_factory.sh}"
 if [[ ! -x "$PAF_SCRIPT" && -x "$(pwd)/skills/project-agent-factory/scripts/agent_factory.sh" ]]; then
   PAF_SCRIPT="$(pwd)/skills/project-agent-factory/scripts/agent_factory.sh"
+fi
+if [[ ! -x "$PAF_SCRIPT" && -x "$(pwd)/idencosmos-agent-skills/skills/project-agent-factory/scripts/agent_factory.sh" ]]; then
+  PAF_SCRIPT="$(pwd)/idencosmos-agent-skills/skills/project-agent-factory/scripts/agent_factory.sh"
 fi
 if [[ ! -x "$PAF_SCRIPT" ]]; then
   echo "error: set PAF_SCRIPT to project-agent-factory/scripts/agent_factory.sh" >&2
@@ -84,13 +88,14 @@ agent_id	role_name	priority	reason	config_relpath	description	developer_instruct
 - `config_relpath`는 `agents/*.toml`만 허용됩니다.
 - `config_relpath`는 하위 디렉터리를 허용하지 않습니다(예: `agents/paf_explorer.toml` 허용, `agents/backend/paf_explorer.toml` 금지).
 - `agent_id`는 영문/숫자/`._-`만 허용됩니다.
-- `model_reasoning_effort`: `low|medium|high`
+- `model_reasoning_effort`: `minimal|low|medium|high|xhigh`
 - `sandbox_mode`: `read-only|workspace-write|danger-full-access`
 - 헤더 외 추가 컬럼은 허용되지 않습니다.
+- `agent_id`에 `.`이 포함돼도 `.codex/config.toml`에는 `[agents."<agent_id>"]`로 안전하게 기록되어 TOML 중첩 테이블 충돌을 피합니다.
 
 ## Outputs
 
-- `apply_report.tsv`: 실제 파일 생성/갱신/정리 결과
+- `apply_report.tsv`: 실제 파일 생성/갱신/정리 결과(`enable_multi_agent_feature` 포함)
 - `scope_validation.tsv`: 프로젝트 경로 제한 검증 결과
 - 위 두 파일을 근거로 AI 요약/감사 텍스트를 생성하세요.
 
@@ -100,6 +105,12 @@ agent_id	role_name	priority	reason	config_relpath	description	developer_instruct
 
 ```bash
 bash "$HOME/.agents/skills/project-agent-factory/tests/test_agent_factory.sh"
+```
+
+설치 전 로컬 저장소에서 검증할 때는 아래 경로를 사용할 수 있습니다.
+
+```bash
+bash "./idencosmos-agent-skills/skills/project-agent-factory/tests/test_agent_factory.sh"
 ```
 
 ## Migration Note
