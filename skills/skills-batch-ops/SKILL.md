@@ -1,6 +1,6 @@
 ---
 name: skills-batch-ops
-description: 외부 AI 오케스트레이터가 만든 후보/리뷰 결과에 대해 병렬 실행 증거와 설치 안전 게이트만 강제 검증합니다.
+description: 외부 AI 오케스트레이터가 생성한 discovery/review queue, worker TSV, review_manifest.ai.tsv를 대상으로 병렬 실행 증거와 설치 직전 구조 게이트만 강제 검증합니다. 후보 탐색/평가/승인 판단은 이미 완료됐고 gate-only 검증 및 승인 항목 설치가 필요할 때 사용합니다.
 ---
 
 # Skills Batch Ops (Gate-Only)
@@ -22,6 +22,12 @@ description: 외부 AI 오케스트레이터가 만든 후보/리뷰 결과에 �
 스크립트가 담당:
 - 산출물의 안전성 게이트 검증
 - 설치 실행 전후 감사 흔적 보존
+
+## 실행 전 체크
+
+- 필수 명령: `bash`, `node`, `npx`, `awk`
+- 권장 명령: `jq` (`parallel_proof.summary.json` 파싱 안정성 향상)
+- 시간 컬럼(`worker_started_at`, `worker_finished_at`)은 ISO 8601 UTC(`...Z`) 형식을 권장합니다.
 
 ## 표준 흐름
 
@@ -72,10 +78,24 @@ bash scripts/skills_batch_ops.sh verify-parallel-proof \
 # 2) 승인 항목 설치 (parallel_proof.summary.json passed=true 필요)
 bash scripts/skills_batch_ops.sh install-approved \
   --manifest <review_manifest.ai.tsv> \
-  --proof <parallel_proof.summary.json>
+  --proof <parallel_proof.summary.json> \
+  --report <install.report.tsv> \
+  --dry-run
 
 # 3) (선택) AI가 증거/설치 리포트를 읽어 감사 로그 생성
 ```
+
+## install-approved 옵션
+
+- `--proof`: 병렬 증거 집계 파일. 미지정 시 manifest 폴더의 `parallel_proof.summary.json` 사용
+- `--report`: 설치 리포트 경로. 미지정 시 manifest 폴더의 `install.report.tsv` 사용
+- `--dry-run`: 실제 설치 없이 설치 대상/명령 기록만 생성
+- `--no-yes`: `npx skills add ... -y` 대신 확인 프롬프트 허용 모드로 실행
+
+## 실패 동작
+
+- `verify-parallel-proof`: strict 조건 미충족 시 리포트/요약 파일을 남기고 non-zero 종료
+- `install-approved`: 승인 대상 중 하나라도 설치 실패 시 전체를 실패로 처리하고 non-zero 종료
 
 ## Removed (Gate-Only)
 
