@@ -248,6 +248,24 @@ R002	review	example/repo@skill-beta
 EOF_Q
 }
 
+build_review_queue_missing_skill_ref_fixture() {
+  local out="$1"
+  cat > "$out" <<'EOF_Q'
+task_id	expected_stage
+R001	review
+R002	review
+EOF_Q
+}
+
+build_review_worker_success_fixture() {
+  local out="$1"
+  cat > "$out" <<'EOF_W'
+task_id	expected_stage	skill_ref	repo	skill	manifest_status	gate_status	gate_reason	project_goal	project_domain	project_constraints	discovery_summary	ai_relevance	ai_quality	ai_risk	ai_confidence	ai_decision	ai_recommended_status	ai_summary	ai_rationale	ai_reviewer	ai_reviewed_at	worker_run_id	worker_id	worker_started_at	worker_finished_at	worker_attempt	orchestrator_name
+R001	review	example/repo@skill-alpha	example/repo	skill-alpha	pending	gate_pass	ok	goal	domain	[]	alpha	95	90	15	0.97	approve	approved	ready	rationale	reviewer-a	2026-02-18T11:00:00Z	run-1	worker-a	2026-02-18T11:00:00Z	2026-02-18T11:02:00Z	1	orch-y
+R002	review	example/repo@skill-beta	example/repo	skill-beta	pending	gate_pass	ok	goal	domain	[]	beta	92	88	18	0.95	approve	approved	ready	rationale	reviewer-b	2026-02-18T11:00:20Z	run-2	worker-b	2026-02-18T11:00:20Z	2026-02-18T11:02:20Z	1	orch-y
+EOF_W
+}
+
 build_review_worker_stage_mismatch_fixture() {
   local out="$1"
   cat > "$out" <<'EOF_W'
@@ -339,6 +357,26 @@ test_verify_parallel_proof_fail_stage_mismatch_process() {
   fi
 
   assert_contains "$tmp/review_parallel_summary.json" 'expected_stage_mismatch' || return 1
+}
+
+test_verify_parallel_proof_fail_review_queue_missing_skill_ref_process() {
+  local tmp
+  tmp="$(mktemp -d)"
+
+  build_review_queue_missing_skill_ref_fixture "$tmp/review_ai.queue.tsv"
+  build_review_worker_success_fixture "$tmp/worker.tsv"
+
+  if "$SCRIPT_PATH" verify-parallel-proof \
+    --stage review \
+    --queue "$tmp/review_ai.queue.tsv" \
+    --out "$tmp/review_parallel_proof.tsv" \
+    --summary "$tmp/review_parallel_summary.json" \
+    "$tmp/worker.tsv" > "$tmp/stdout.txt" 2> "$tmp/stderr.txt"; then
+    log "assertion failed: expected review queue skill_ref validation failure"
+    return 1
+  fi
+
+  assert_contains "$tmp/review_parallel_summary.json" 'missing_worker_metadata' || return 1
 }
 
 test_verify_parallel_proof_fail_same_worker_overlap_process() {
@@ -625,6 +663,7 @@ run_test "process" "verify-parallel-proof success" test_verify_parallel_proof_su
 run_test "process" "verify-parallel-proof discovery skill_ref optional" test_verify_parallel_proof_discovery_skill_ref_optional_process
 run_test "process" "verify-parallel-proof coverage fail" test_verify_parallel_proof_fail_coverage_process
 run_test "process" "verify-parallel-proof stage mismatch fail" test_verify_parallel_proof_fail_stage_mismatch_process
+run_test "process" "verify-parallel-proof review queue missing skill_ref fail" test_verify_parallel_proof_fail_review_queue_missing_skill_ref_process
 run_test "process" "verify-parallel-proof single-worker overlap fail" test_verify_parallel_proof_fail_same_worker_overlap_process
 run_test "process" "validate-content deprecated" test_validate_content_deprecated_process
 run_test "process" "install-approved requires proof" test_install_approved_requires_proof_process

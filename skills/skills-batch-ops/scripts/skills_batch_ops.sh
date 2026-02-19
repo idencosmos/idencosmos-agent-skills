@@ -230,7 +230,11 @@ const qTaskIdIdx = indexOf(queueParsed.header, 'task_id');
 const qExpectedStageIdx = indexOf(queueParsed.header, 'expected_stage');
 const qSkillRefIdx = indexOf(queueParsed.header, 'skill_ref');
 
-if (qTaskIdIdx < 0 || qExpectedStageIdx < 0) {
+if (
+  qTaskIdIdx < 0
+  || qExpectedStageIdx < 0
+  || (stage === 'review' && qSkillRefIdx < 0)
+) {
   reasonCodes.add('missing_worker_metadata');
 }
 
@@ -240,6 +244,12 @@ for (const row of queueParsed.rows) {
   const expectedStage = safeCell(row, qExpectedStageIdx);
   const skillRef = safeCell(row, qSkillRefIdx);
   queueTasks.set(taskId, { expectedStage, skillRef });
+  if (!expectedStage) {
+    addTaskReason(taskId, 'missing_worker_metadata');
+  }
+  if (stage === 'review' && !skillRef) {
+    addTaskReason(taskId, 'missing_worker_metadata');
+  }
   ensureTaskState(taskId, skillRef);
 }
 
@@ -316,6 +326,10 @@ for (const workerPath of workerFiles) {
 
     const metadataMissing = [workerRunId, workerId, startedAt, finishedAt, attempt, orchestrator].some((v) => !v);
     if (metadataMissing || requiredHeaderMissing) {
+      addTaskReason(taskId, 'missing_worker_metadata');
+    }
+
+    if (stage === 'review' && (!queueSkillRef || !skillRef)) {
       addTaskReason(taskId, 'missing_worker_metadata');
     }
 
