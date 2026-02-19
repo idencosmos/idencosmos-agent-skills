@@ -25,7 +25,10 @@ description: 외부 AI 오케스트레이터가 생성한 discovery/review queue
 
 ## 실행 전 체크
 
-- 필수 명령: `bash`, `node`, `npx`, `awk`
+- 필수 명령:
+  - 공통: `bash`, `awk`
+  - `verify-parallel-proof`: `node`
+  - `install-approved`: `npx`
 - 권장 명령: `jq` (`parallel_proof.summary.json` 파싱 안정성 향상)
 - 시간 컬럼(`worker_started_at`, `worker_finished_at`)은 ISO 8601 UTC(`...Z`) 형식을 권장합니다.
 
@@ -34,7 +37,7 @@ description: 외부 AI 오케스트레이터가 생성한 discovery/review queue
 1. 외부 AI 오케스트레이터가 queue/worker TSV를 생성
 2. `verify-parallel-proof --stage discovery`
 3. `verify-parallel-proof --stage review`
-4. 외부 AI가 최종 `review_manifest.ai.tsv` 작성 (`status` 포함)
+4. 외부 AI가 최종 `review_manifest.ai.tsv` 작성 (`status` 또는 `manifest_status` 포함)
 5. `install-approved --proof <parallel_proof.summary.json>`
 6. (선택) AI가 `parallel_proof.summary.json` + `install.report.tsv`를 읽어 감사 로그를 생성
 
@@ -47,6 +50,18 @@ description: 외부 AI 오케스트레이터가 생성한 discovery/review queue
   - `worker_started_at`, `worker_finished_at`
   - `worker_attempt`, `orchestrator_name`
 - Review stage에서는 queue/worker 모두 `skill_ref`를 필수로 채웁니다.
+- Install manifest(`review_manifest.ai.tsv`) 필수 필드:
+  - `skill_ref`, `repo`, `skill`
+  - `status` 또는 `manifest_status` (`approved` 행만 설치 대상)
+
+## 출력 산출물
+
+- `verify-parallel-proof`:
+  - `--out`: 태스크별 strict 점검 결과 TSV
+  - `--summary`: stage별 요약 JSON
+  - 자동 집계: summary 경로 기준 `parallel_proof.summary.json`
+- `install-approved`:
+  - `--report`(기본: manifest 폴더 `install.report.tsv`): 설치 실행/실패 감사 리포트
 
 ## 구조 gate 의미
 
