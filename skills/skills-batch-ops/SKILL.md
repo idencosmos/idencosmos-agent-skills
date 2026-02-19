@@ -17,6 +17,7 @@ description: 프로젝트에 맞는 스킬을 찾아 설치해야 할 때 사용
 핵심 원칙:
 - 3개 탐색 채널(`find`, `popular`, `web`)을 모두 사용합니다.
 - 이름만으로 설치하지 않고 반드시 `SKILL.md` 실체를 검증합니다.
+- 프로젝트 키워드와 무관한 후보는 기본적으로 `approved`에 올리지 않습니다.
 - 설치 전에는 기본적으로 `--dry-run`을 먼저 실행합니다.
 - 기본 `run`은 3개 채널 중 하나라도 비어 있으면 실패합니다. 예외가 필요할 때만 `--allow-empty-sources`를 사용합니다.
 
@@ -48,6 +49,7 @@ python3 "$SBP_SCRIPT" run \
   --popular-input "$RUN_DIR/popular_output.html" \
   --web-input "$RUN_DIR/web_candidates.tsv" \
   --min-methods 2 \
+  --min-project-keyword-hits 1 \
   --limit 8 \
   --dry-run
 ```
@@ -60,6 +62,7 @@ python3 "$SBP_SCRIPT" collect-sources-live \
   --run-dir "$RUN_DIR" \
   --run-after-collect \
   --min-methods 2 \
+  --min-project-keyword-hits 1 \
   --limit 8 \
   --dry-run
 ```
@@ -140,6 +143,7 @@ python3 "$SBP_SCRIPT" collect-sources-live \
 - 기본 `web-mode=github`에서 GitHub API 후보가 0건이면 `skills find` 기반 웹 후보 수집으로 자동 fallback합니다.
 - `--allow-empty-sources`: 비어 있는 채널 허용
 - `--run-after-collect`: 수집 직후 `run` 단계 자동 실행
+- `--min-project-keyword-hits`: 승인 최소 프로젝트 키워드 히트 수 (기본 `1`, 느슨하게 하려면 `0`)
 
 ### `analyze-project`
 
@@ -210,11 +214,12 @@ python3 "$SBP_SCRIPT" build-manifest \
   --project-profile "$RUN_DIR/project_profile.tsv" \
   --out "$RUN_DIR/review_manifest.ai.tsv" \
   --min-methods 2 \
+  --min-project-keyword-hits 1 \
   --limit 8
 ```
 
-`content_status=passed` + 멀티소스 조건(`min_methods`)을 만족한 항목만 `approved`로 생성합니다.
-`project_keyword_hits`는 프로젝트 키워드와 스킬 본문/설명 기반 매칭 근거를 제공합니다.
+`content_status=passed` + 멀티소스 조건(`min_methods`) + 프로젝트 키워드 조건(`min_project_keyword_hits`)을 만족한 항목만 `approved`로 생성합니다.
+`project_keyword_hits`는 프로젝트 키워드와 스킬 본문/설명 기반 매칭 근거를 제공합니다. 키워드 게이트를 완화하려면 `--min-project-keyword-hits 0`을 사용하세요.
 
 ### `install-manifest`
 
@@ -230,8 +235,8 @@ python3 "$SBP_SCRIPT" install-manifest \
 ## Decision Rules
 
 - `SKILL.md` 검증 실패(`content_status!=passed`)는 `rejected`.
-- 검증 통과 + `method_count >= min_methods`만 `approved`.
-- `project_keyword_hits`는 우선순위 점수(`score`)에 반영됩니다.
+- 검증 통과 + `method_count >= min_methods` + `project_keyword_hits >= min_project_keyword_hits`만 `approved`.
+- 기본값은 `min_project_keyword_hits=1`이며, 프로젝트 적합성 게이트를 완화하려면 `--min-project-keyword-hits 0`을 사용합니다.
 - `limit` 초과 승인 후보는 `pending`으로 조정합니다.
 
 ## Legacy Gate-Only Script

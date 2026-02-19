@@ -1060,6 +1060,7 @@ def collect_sources_live(args: argparse.Namespace) -> int:
         popular_evidence_url=args.popular_url,
         min_methods=max(args.min_methods, 1),
         limit=max(args.limit, 1),
+        min_project_keyword_hits=max(args.min_project_keyword_hits, 0),
         dry_run=bool(args.dry_run),
         no_yes=bool(args.no_yes),
         allow_empty_sources=bool(args.allow_empty_sources),
@@ -1074,12 +1075,14 @@ def build_manifest(
     project_profile: Path | None,
     min_methods: int,
     limit: int,
+    min_project_keyword_hits: int,
 ) -> None:
     merged_rows = read_table(merged)
     content_rows = read_table(content_report)
     content_map = {row.get("skill_ref", ""): row for row in content_rows}
     project_keywords = load_project_keywords(project_profile)
 
+    keyword_gate_active = bool(project_keywords) and min_project_keyword_hits > 0
     drafted: list[dict[str, object]] = []
     for row in merged_rows:
         skill_ref = row.get("skill_ref", "")
@@ -1100,6 +1103,7 @@ def build_manifest(
         keyword_hits = sorted(project_keywords.intersection(skill_tokens.union(content_tokens)))
         keyword_match = "true" if keyword_hits else "false"
         keyword_hits_value = ",".join(keyword_hits[:20])
+        keyword_hit_count = len(keyword_hits)
         relevance_bonus = min(len(keyword_hits), 5) * 12
         score = method_count * 100 + min(installs_max, 500_000) // 5_000 + relevance_bonus
 
@@ -1107,7 +1111,18 @@ def build_manifest(
             manifest_status = "rejected"
             decision = "reject"
             rationale = "SKILL.md content verification failed"
-        elif method_count >= min_methods:
+        elif method_count < min_methods:
+            manifest_status = "pending"
+            decision = "hold"
+            rationale = f"content verified but discovery coverage is below min_methods={min_methods}"
+        elif keyword_gate_active and keyword_hit_count < min_project_keyword_hits:
+            manifest_status = "pending"
+            decision = "hold"
+            rationale = (
+                "content verified and discovery coverage passed, "
+                f"but project keyword hits are below min_project_keyword_hits={min_project_keyword_hits}"
+            )
+        else:
             manifest_status = "approved"
             decision = "approve"
             if keyword_hits:
@@ -1122,10 +1137,6 @@ def build_manifest(
                 )
             else:
                 rationale = f"content verified and discovered by {method_count} methods"
-        else:
-            manifest_status = "pending"
-            decision = "hold"
-            rationale = f"content verified but discovery coverage is below min_methods={min_methods}"
 
         drafted.append(
             {
@@ -1297,6 +1308,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
         project_profile=project_profile,
         min_methods=args.min_methods,
         limit=args.limit,
+        min_project_keyword_hits=max(args.min_project_keyword_hits, 0),
     )
 
     install_rc = install_manifest(manifest_out, install_out, dry_run=args.dry_run, yes=not args.no_yes)
@@ -1354,6 +1366,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     manifest_cmd.add_argument("--project-profile")
     manifest_cmd.add_argument("--min-methods", type=int, default=2)
     manifest_cmd.add_argument("--limit", type=int, default=8)
+    manifest_cmd.add_argument("--min-project-keyword-hits", type=int, default=1)
 
     install_cmd = sub.add_parser("install-manifest", help="install approved skills from manifest")
     install_cmd.add_argument("--manifest", required=True)
@@ -1371,6 +1384,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     run_cmd.add_argument("--popular-evidence-url", default="")
     run_cmd.add_argument("--min-methods", type=int, default=2)
     run_cmd.add_argument("--limit", type=int, default=8)
+    run_cmd.add_argument("--min-project-keyword-hits", type=int, default=1)
     run_cmd.add_argument("--dry-run", action="store_true")
     run_cmd.add_argument("--no-yes", action="store_true")
     run_cmd.add_argument(
@@ -1403,6 +1417,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     live_cmd.add_argument("--run-after-collect", action="store_true")
     live_cmd.add_argument("--min-methods", type=int, default=2)
     live_cmd.add_argument("--limit", type=int, default=8)
+    live_cmd.add_argument("--min-project-keyword-hits", type=int, default=1)
     live_cmd.add_argument("--dry-run", action="store_true")
     live_cmd.add_argument("--no-yes", action="store_true")
 
@@ -1437,6 +1452,7 @@ def main(argv: list[str] | None = None) -> int:
             project_profile=Path(args.project_profile) if args.project_profile else None,
             min_methods=max(args.min_methods, 1),
             limit=max(args.limit, 1),
+            min_project_keyword_hits=max(args.min_project_keyword_hits, 0),
         )
         return 0
     if args.subcommand == "install-manifest":

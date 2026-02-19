@@ -189,10 +189,55 @@ TSV
   assert_contains "$tmp/install.report.tsv" $'\tdry-run\tnpx skills add vercel-labs/skills --skill find-skills -y\tdry-run' || return 1
 }
 
+test_manifest_project_keyword_gate_process() {
+  local tmp
+  tmp="$(mktemp -d)"
+
+  cat > "$tmp/candidates.merged.tsv" <<'TSV'
+skill_ref	repo	skill	methods	method_count	installs_max	evidence_count	source_files
+example/repo@generic-skill	example/repo	generic-skill	find,popular,web	3	9000	3	a.tsv,b.tsv,c.tsv
+TSV
+
+  cat > "$tmp/review_content.tsv" <<'TSV'
+skill_ref	repo	skill	content_status	content_checked	source_url	frontmatter_name	frontmatter_description	body_line_count	body_char_count	content_keywords	reason
+example/repo@generic-skill	example/repo	generic-skill	passed	true	https://example.com/skill.md	generic-skill	Generic skill	10	240	marketing,content,cms	ok
+TSV
+
+  cat > "$tmp/project_profile.tsv" <<'TSV'
+key	value
+generated_at	2026-02-19T00:00:00Z
+project_root	/tmp/example
+technologies	python,nodejs
+top_keywords	python,testing,pytest
+TSV
+
+  python3 "$PIPELINE_SCRIPT" build-manifest \
+    --merged "$tmp/candidates.merged.tsv" \
+    --content-report "$tmp/review_content.tsv" \
+    --project-profile "$tmp/project_profile.tsv" \
+    --out "$tmp/review_manifest.keyword-gated.tsv" \
+    --min-methods 2 \
+    --limit 8
+
+  python3 "$PIPELINE_SCRIPT" build-manifest \
+    --merged "$tmp/candidates.merged.tsv" \
+    --content-report "$tmp/review_content.tsv" \
+    --project-profile "$tmp/project_profile.tsv" \
+    --out "$tmp/review_manifest.keyword-optional.tsv" \
+    --min-methods 2 \
+    --limit 8 \
+    --min-project-keyword-hits 0
+
+  assert_contains "$tmp/review_manifest.keyword-gated.tsv" $'\tpending\tpending\thold\t' || return 1
+  assert_contains "$tmp/review_manifest.keyword-gated.tsv" "project keyword hits are below min_project_keyword_hits=1" || return 1
+  assert_contains "$tmp/review_manifest.keyword-optional.tsv" $'\tapproved\tapproved\tapprove\t' || return 1
+}
+
 log "## Pipeline Suite"
 run_test "collect-find/popular/web + merge" test_collect_and_merge_process
 run_test "collect-sources-live seed mode" test_collect_sources_live_seed_process
 run_test "build-manifest + install-manifest dry-run" test_manifest_and_install_dry_run_process
+run_test "build-manifest project keyword gate" test_manifest_project_keyword_gate_process
 
 log ""
 log "summary: pass=$pass fail=$fail"
