@@ -174,6 +174,7 @@ validate_plan_schema() {
     [[ "$priority" =~ ^[0-9]+$ ]] || die "plan row $line_no: priority must be a positive integer"
     [[ "$priority" -ge 1 ]] || die "plan row $line_no: priority must be >= 1"
     [[ -n "$reason" ]] || die "plan row $line_no: reason is required"
+    [[ "$reason" =~ (official|github|web)-[0-9]+ ]] || die "plan row $line_no: reason must include at least one source_id token (official-<n>|github-<n>|web-<n>)"
     validate_agent_config_relpath "$config_relpath" >/dev/null
     [[ -n "$description" ]] || die "plan row $line_no: description is required"
     [[ -n "$prompt_text" ]] || die "plan row $line_no: ${PLAN_PROMPT_COLUMN} is required"
@@ -182,6 +183,9 @@ validate_plan_schema() {
       minimal|low|medium|high|xhigh) ;;
       *) die "plan row $line_no: model_reasoning_effort must be one of minimal|low|medium|high|xhigh" ;;
     esac
+    if [[ "$model_reasoning_effort" == "xhigh" ]]; then
+      printf 'warn: plan row %s uses deprecated model_reasoning_effort=xhigh; prefer high for new plans\n' "$line_no" >&2
+    fi
     case "$sandbox_mode" in
       read-only|workspace-write|danger-full-access) ;;
       *) die "plan row $line_no: sandbox_mode must be one of read-only|workspace-write|danger-full-access" ;;

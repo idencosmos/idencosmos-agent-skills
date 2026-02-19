@@ -76,11 +76,13 @@ mkdir -p "$RUN_DIR"
 ```tsv
 source_id	source_type	url	checked_at_utc	relevance_note	key_constraints
 official-1	official	https://developers.openai.com/codex/multi-agent	2026-02-19T00:00:00Z	multi_agent 활성화, roles 스키마 확인	experimental, feature flag 필요
-github-1	github	https://github.com/openai/codex/issues/3280	2026-02-19T00:00:00Z	프론트/백 분리 맥락의 오케스트레이션 요구 사례	아이디어/요청 성격
-web-1	web	https://github.com/vercel-labs/coding-agent-template	2026-02-19T00:00:00Z	멀티 에이전트 플랫폼 구현 사례(실행 아키텍처 참고)	템플릿 구현 세부는 프로젝트별 차이
+github-1	github	https://github.com/openai/codex/blob/main/docs/advanced.md#sub-tasks-with-the-agent-tool	2026-02-19T00:00:00Z	에이전트 도구로 하위 작업을 분리/병합하는 실제 사용 패턴 참고	experimental 기능 플래그와 스코프 관리 필요
+web-1	web	https://cookbook.openai.com/examples/orchestrating_agents	2026-02-19T00:00:00Z	GitHub 외 공개 자료에서 오케스트레이터-워커 분해 패턴 검증	일반 오케스트레이션 예시이므로 Codex 설정 키는 공식 문서로 재검증
 ```
 
 `source_type=official|github|web` 3종류를 모두 포함하세요.
+`source_type=web`는 GitHub 외 도메인 URL만 사용하세요.
+`source_type=github`는 GitHub URL만 사용하세요.
 네트워크가 막히면 `relevance_note`에 `blocked`를 명시하고 부분 검증으로 보고하세요.
 
 ## Step 3) 멀티 에이전트 계획 생성 (`agent_plan.tsv`)
@@ -99,18 +101,18 @@ agent_id	role_name	priority	reason	config_relpath	description	prompt	model	model
 - `config_relpath`는 하위 디렉터리를 허용하지 않습니다(예: `agents/paf_explorer.toml` 허용, `agents/backend/paf_explorer.toml` 금지).
 - 공식 Codex 스펙은 `config_file`에 일반 상대경로를 허용하지만, 이 스킬은 경로 안전성과 정리 자동화를 위해 `agents/*.toml` 단일 깊이로 제한합니다.
 - `agent_id`는 영문/숫자/`._-`만 허용됩니다.
-- `model_reasoning_effort`: `minimal|low|medium|high|xhigh`
+- `model_reasoning_effort`: `minimal|low|medium|high|xhigh` (`xhigh`는 deprecated이므로 신규 계획은 `high` 우선)
 - `sandbox_mode`: `read-only|workspace-write|danger-full-access`
 - 헤더 외 추가 컬럼은 허용되지 않습니다.
 - `agent_id`에 `.`이 포함돼도 `.codex/config.toml`에는 `[agents."<agent_id>"]`로 안전하게 기록되어 TOML 중첩 테이블 충돌을 피합니다.
-- `reason`에는 `project_profile.md` 근거 + `source_review.tsv`의 `source_id`를 포함하세요.
+- `reason`에는 `project_profile.md` 근거 + `source_review.tsv`의 `source_id`(`official-<n>|github-<n>|web-<n>`)를 포함하세요. `apply-plan`에서 형식을 검증합니다.
 
 샘플:
 
 ```tsv
 agent_id	role_name	priority	reason	config_relpath	description	prompt	model	model_reasoning_effort	sandbox_mode
-paf_explorer	Project Explorer	10	stack-map(package+tests), source=official-1	agents/paf_explorer.toml	Explore repo structure and constraints.	Map architecture with evidence-first notes.	gpt-5	medium	workspace-write
-paf_implementer	Project Implementer	20	delivery-path(api+ui), source=github-1	agents/paf_implementer.toml	Implement scoped changes with verification.	Apply requested edits and run available checks.	gpt-5	medium	workspace-write
+paf_explorer	Project Explorer	10	stack-map(package+tests), source=official-1 web-1	agents/paf_explorer.toml	Explore repo structure and constraints.	Map architecture with evidence-first notes.	gpt-5	medium	workspace-write
+paf_implementer	Project Implementer	20	delivery-path(api+ui), source=github-1 official-1	agents/paf_implementer.toml	Implement scoped changes with verification.	Apply requested edits and run available checks.	gpt-5	high	workspace-write
 ```
 
 레거시 `developer_instructions` 헤더도 하위 호환으로 허용되지만, 신규 계획은 `prompt` 헤더를 사용하세요.

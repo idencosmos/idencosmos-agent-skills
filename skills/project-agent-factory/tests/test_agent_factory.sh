@@ -18,8 +18,8 @@ mkdir -p "$run_dir"
 
 cat > "$run_dir/agent_plan.tsv" <<'TSV'
 agent_id	role_name	priority	reason	config_relpath	description	prompt	model	model_reasoning_effort	sandbox_mode
-paf_explorer	Project Explorer	10	context	agents/paf_explorer.toml	Explore project structure.	Collect evidence-backed architecture notes.	gpt-5	medium	workspace-write
-paf.implementer	Project Implementer	20	delivery	agents/paf_implementer.toml	Implement requested changes.	Apply scoped edits and run available checks.	gpt-5-codex	xhigh	danger-full-access
+paf_explorer	Project Explorer	10	stack-map source=official-1	agents/paf_explorer.toml	Explore project structure.	Collect evidence-backed architecture notes.	gpt-5	medium	workspace-write
+paf.implementer	Project Implementer	20	delivery source=github-1	agents/paf_implementer.toml	Implement requested changes.	Apply scoped edits and run available checks.	gpt-5-codex	xhigh	danger-full-access
 TSV
 
 bash "$SCRIPT_PATH" apply-plan \
@@ -52,7 +52,7 @@ rg -q 'Do not write outside the project root\.' "$project_root/.codex/agents/paf
 # stale managed configs should be removed when plan shrinks
 cat > "$run_dir/reduced_plan.tsv" <<'TSV'
 agent_id	role_name	priority	reason	config_relpath	description	prompt	model	model_reasoning_effort	sandbox_mode
-paf_explorer	Project Explorer	10	keep	agents/paf_explorer.toml	Explore project structure.	Collect evidence-backed architecture notes.	gpt-5	medium	workspace-write
+paf_explorer	Project Explorer	10	keep source=official-1	agents/paf_explorer.toml	Explore project structure.	Collect evidence-backed architecture notes.	gpt-5	medium	workspace-write
 TSV
 
 reduced_run_dir="$project_root/.agents/project-agent-factory/runs/reduced"
@@ -73,7 +73,7 @@ fi
 # legacy developer_instructions header should still be accepted
 cat > "$run_dir/legacy_plan.tsv" <<'TSV'
 agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
-paf_legacy	Legacy Agent	15	compat	agents/paf_legacy.toml	Verify legacy header compatibility.	Support old plan header.	gpt-5	low	workspace-write
+paf_legacy	Legacy Agent	15	compat source=official-1	agents/paf_legacy.toml	Verify legacy header compatibility.	Support old plan header.	gpt-5	low	workspace-write
 TSV
 
 legacy_run_dir="$project_root/.agents/project-agent-factory/runs/legacy"
@@ -108,7 +108,7 @@ fi
 # apply-plan should reject malformed headers
 cat > "$run_dir/bad_header.tsv" <<'TSV'
 agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	sandbox_mode
-paf_explorer	Project Explorer	10	bad	agents/paf_explorer.toml	Explore project structure.	Collect evidence.	gpt-5	workspace-write
+paf_explorer	Project Explorer	10	bad source=official-1	agents/paf_explorer.toml	Explore project structure.	Collect evidence.	gpt-5	workspace-write
 TSV
 
 if bash "$SCRIPT_PATH" apply-plan \
@@ -122,7 +122,7 @@ fi
 # apply-plan should reject empty required fields
 cat > "$run_dir/bad_empty_field.tsv" <<'TSV'
 agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
-paf_explorer	Project Explorer	10	bad	agents/paf_explorer.toml	Explore project structure.		gpt-5	medium	workspace-write
+paf_explorer	Project Explorer	10	bad source=official-1	agents/paf_explorer.toml	Explore project structure.		gpt-5	medium	workspace-write
 TSV
 
 if bash "$SCRIPT_PATH" apply-plan \
@@ -133,11 +133,25 @@ if bash "$SCRIPT_PATH" apply-plan \
   exit 1
 fi
 
+# apply-plan should reject reason rows without source_id tokens
+cat > "$run_dir/bad_reason_source.tsv" <<'TSV'
+agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
+paf_explorer	Project Explorer	10	justification-without-source	agents/paf_explorer.toml	Explore project structure.	Collect evidence.	gpt-5	medium	workspace-write
+TSV
+
+if bash "$SCRIPT_PATH" apply-plan \
+  --project-root "$project_root" \
+  --plan "$run_dir/bad_reason_source.tsv" \
+  --out-dir "$run_dir/bad_reason_source_run" >/dev/null 2>&1; then
+  echo "error: apply-plan should require source_id tokens in reason" >&2
+  exit 1
+fi
+
 # apply-plan should reject duplicate ids/config paths
 cat > "$run_dir/bad_duplicate.tsv" <<'TSV'
 agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
-dup	A	10	one	agents/dup.toml	Desc A	Instr A	gpt-5	medium	workspace-write
-dup	B	20	two	agents/dup2.toml	Desc B	Instr B	gpt-5	medium	workspace-write
+dup	A	10	one source=official-1	agents/dup.toml	Desc A	Instr A	gpt-5	medium	workspace-write
+dup	B	20	two source=github-1	agents/dup2.toml	Desc B	Instr B	gpt-5	medium	workspace-write
 TSV
 
 if bash "$SCRIPT_PATH" apply-plan \
@@ -150,8 +164,8 @@ fi
 
 cat > "$run_dir/bad_duplicate_config.tsv" <<'TSV'
 agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
-a1	A	10	one	agents/same.toml	Desc A	Instr A	gpt-5	medium	workspace-write
-a2	B	20	two	agents/same.toml	Desc B	Instr B	gpt-5	medium	workspace-write
+a1	A	10	one source=official-1	agents/same.toml	Desc A	Instr A	gpt-5	medium	workspace-write
+a2	B	20	two source=github-1	agents/same.toml	Desc B	Instr B	gpt-5	medium	workspace-write
 TSV
 
 if bash "$SCRIPT_PATH" apply-plan \
@@ -167,7 +181,7 @@ outside_target="$tmp_dir/escape.toml"
 rm -f "$outside_target"
 cat > "$run_dir/malicious_plan.tsv" <<'TSV'
 agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
-evil	Evil	10	attempt	../../escape.toml	Malicious	Do bad things	gpt-5	medium	workspace-write
+evil	Evil	10	attempt source=web-1	../../escape.toml	Malicious	Do bad things	gpt-5	medium	workspace-write
 TSV
 
 if bash "$SCRIPT_PATH" apply-plan \
@@ -182,7 +196,7 @@ fi
 # apply-plan must reject nested config_relpath (only agents/*.toml allowed)
 cat > "$run_dir/bad_nested_config.tsv" <<'TSV'
 agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
-nested	Nested Agent	10	invalid	agents/nested/nested.toml	Nested path should fail.	Stay at one level.	gpt-5	medium	workspace-write
+nested	Nested Agent	10	invalid source=official-1	agents/nested/nested.toml	Nested path should fail.	Stay at one level.	gpt-5	medium	workspace-write
 TSV
 
 if bash "$SCRIPT_PATH" apply-plan \
@@ -195,7 +209,7 @@ fi
 
 # apply-plan should handle CRLF plans without leaking carriage returns to TOML
 printf 'agent_id\trole_name\tpriority\treason\tconfig_relpath\tdescription\tdeveloper_instructions\tmodel\tmodel_reasoning_effort\tsandbox_mode\r\n' > "$run_dir/crlf_plan.tsv"
-printf 'paf_windows\tWindows Agent\t30\tcrlf\tagents/paf_windows.toml\tHandle CRLF plan rows.\tKeep outputs normalized.\tgpt-5\tmedium\tworkspace-write\r\n' >> "$run_dir/crlf_plan.tsv"
+printf 'paf_windows\tWindows Agent\t30\tcrlf source=web-1\tagents/paf_windows.toml\tHandle CRLF plan rows.\tKeep outputs normalized.\tgpt-5\tmedium\tworkspace-write\r\n' >> "$run_dir/crlf_plan.tsv"
 
 crlf_run_dir="$project_root/.agents/project-agent-factory/runs/crlf"
 bash "$SCRIPT_PATH" apply-plan \
@@ -222,7 +236,7 @@ TOML
 
 cat > "$corrupt_root/plan.tsv" <<'TSV'
 agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
-paf_explorer	Project Explorer	10	keep	agents/paf_explorer.toml	Explore project structure.	Collect evidence-backed architecture notes.	gpt-5	medium	workspace-write
+paf_explorer	Project Explorer	10	keep source=official-1	agents/paf_explorer.toml	Explore project structure.	Collect evidence-backed architecture notes.	gpt-5	medium	workspace-write
 TSV
 
 if bash "$SCRIPT_PATH" apply-plan \
@@ -249,7 +263,7 @@ TOML
 
 cat > "$feature_root/plan.tsv" <<'TSV'
 agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
-paf_explorer	Project Explorer	10	feature	agents/paf_explorer.toml	Explore project structure.	Collect evidence-backed architecture notes.	gpt-5	minimal	workspace-write
+paf_explorer	Project Explorer	10	feature source=official-1	agents/paf_explorer.toml	Explore project structure.	Collect evidence-backed architecture notes.	gpt-5	minimal	workspace-write
 TSV
 
 feature_run_dir="$feature_root/.agents/project-agent-factory/runs/feature"
