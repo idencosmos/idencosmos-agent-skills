@@ -17,7 +17,7 @@ npx skills add idencosmos/idencosmos-agent-skills --skill <skill-name> -y
 ## Published Skills
 
 - `skills-batch-ops`: 외부 AI 오케스트레이터가 만든 후보/리뷰 결과에 대해 병렬 실행 증거와 설치 안전 게이트를 강제 검증하고, `approved + gate_pass` 항목만 설치.
-- `project-agent-factory`: 프로젝트를 자동 탐색해 Codex 멀티 에이전트 구성을 제안하고, 프로젝트 내부 `.codex/config.toml` 및 `.codex/agents/*.toml`을 안전하게 생성/갱신.
+- `project-agent-factory`: AI가 생성한 `agent_plan.tsv`를 검증하고, 프로젝트 내부 `.codex/config.toml` 및 `.codex/agents/*.toml`에 안전 적용/검증하며 `apply_report.tsv`, `scope_validation.tsv` 실행 증적을 남김.
 
 ## Development
 
