@@ -1,151 +1,187 @@
 ---
 name: skills-batch-ops
-description: 외부 AI 오케스트레이터가 생성한 discovery/review queue, worker TSV, review_manifest.ai.tsv를 대상으로 병렬 실행 증거와 설치 직전 구조 게이트만 강제 검증합니다. 후보 탐색/평가/승인 판단은 이미 완료됐고 gate-only 검증 및 승인 항목 설치가 필요할 때 사용합니다.
+description: 프로젝트 분석 후 find-skills, 인기/사용량 기반 후보, 인터넷 검색 후보를 함께 수집하고, 각 후보의 실제 SKILL.md 내용을 검증한 뒤 승인 항목만 설치합니다. 멀티소스 탐색+내용 검토+설치를 한 번에 실행할 때 사용합니다.
 ---
 
-# Skills Batch Ops (Gate-Only)
+# Skills Batch Ops
 
-이 스킬은 **AI 판단 자체를 스크립트로 대체하지 않습니다.**
-스크립트는 아래 2가지 게이트 업무만 수행합니다.
+`skills-batch-ops`는 아래 1~6 단계를 하나의 파이프라인으로 고정합니다.
 
-1. `verify-parallel-proof`: 워커 병렬 실행 증거 strict 검증 (queue `task_id`가 2개 이상이면 서로 다른 `worker_id` 간 시간 overlap 필수)
-2. `install-approved`: `approved`만 스킬 단위 설치 (병렬 증거 `passed=true` + 설치 직전 구조 게이트 필수, 일부 실패 시 전체 실패)
+1. 프로젝트 분석
+2. `find-skills` 기반 후보 수집
+3. 사용자 수/인지도(인기 목록) 기반 후보 수집
+4. 인터넷 검색 기반 후보 수집
+5. 2~4번 후보의 실제 `SKILL.md` 내용 검증
+6. 승인(`approved`) 후보 설치
 
-## 책임 분리
+핵심 원칙:
+- 3개 탐색 채널(`find`, `popular`, `web`)을 모두 사용합니다.
+- 이름만으로 설치하지 않고 반드시 `SKILL.md` 실체를 검증합니다.
+- 설치 전에는 기본적으로 `--dry-run`을 먼저 실행합니다.
 
-스크립트 외부(오케스트레이터/AI)가 담당:
-- 프로젝트 분석
-- discovery/review 태스크 생성
-- 후보 탐색/평가
-- 최종 승인 상태(`approved|pending|rejected`) 결정
-
-스크립트가 담당:
-- 산출물의 안전성 게이트 검증
-- 설치 실행 전후 감사 흔적 보존
-
-## 실행 전 체크
-
-- 필수 명령:
-  - 공통: `bash`, `awk`
-  - `verify-parallel-proof`: `node`
-  - `install-approved`: `npx`
-- 권장 명령: `jq` (`parallel_proof.summary.json` 파싱 안정성 향상)
-- 시간 컬럼(`worker_started_at`, `worker_finished_at`)은 ISO 8601 UTC(`...Z`) 형식을 권장합니다.
-
-## 스크립트 경로 고정
-
-실행 전에 스크립트 경로를 먼저 고정하세요.
+## Script Path
 
 ```bash
-SKILLS_BATCH_OPS_SCRIPT="$HOME/.agents/skills/skills-batch-ops/scripts/skills_batch_ops.sh"
-
-if [[ ! -x "$SKILLS_BATCH_OPS_SCRIPT" ]]; then
-  SKILLS_BATCH_OPS_SCRIPT="$(pwd)/skills/skills-batch-ops/scripts/skills_batch_ops.sh"
+SBP_SCRIPT="${SBP_SCRIPT:-$HOME/.agents/skills/skills-batch-ops/scripts/skills_batch_pipeline.py}"
+if [[ ! -x "$SBP_SCRIPT" && -x "$(pwd)/skills/skills-batch-ops/scripts/skills_batch_pipeline.py" ]]; then
+  SBP_SCRIPT="$(pwd)/skills/skills-batch-ops/scripts/skills_batch_pipeline.py"
+fi
+if [[ ! -x "$SBP_SCRIPT" ]]; then
+  echo "error: set SBP_SCRIPT to skills-batch-ops/scripts/skills_batch_pipeline.py" >&2
+  exit 1
 fi
 ```
 
-위 변수는 설치본(`~/.agents/...`)과 저장소 체크아웃(`skills/...`) 모두에서 동작하도록 준비하는 용도입니다.
+## Quick Start (End-to-End)
 
-## 표준 흐름
-
-1. 외부 AI 오케스트레이터가 queue/worker TSV를 생성
-2. `verify-parallel-proof --stage discovery`
-3. `verify-parallel-proof --stage review`
-4. 외부 AI가 최종 `review_manifest.ai.tsv` 작성 (`status` 또는 `manifest_status` 포함)
-5. `install-approved --proof <parallel_proof.summary.json>`
-6. (선택) AI가 `parallel_proof.summary.json` + `install.report.tsv`를 읽어 감사 로그를 생성
-
-## 필수 입력 계약
-
-- Queue TSV 공통 필드: `task_id`, `expected_stage`
-- Worker TSV 공통 필드:
-  - `task_id`, `expected_stage`
-  - `worker_run_id`, `worker_id`
-  - `worker_started_at`, `worker_finished_at`
-  - `worker_attempt`, `orchestrator_name`
-- Review stage에서는 queue/worker 모두 `skill_ref`를 필수로 채웁니다.
-- Install manifest(`review_manifest.ai.tsv`) 필수 필드:
-  - `skill_ref`, `repo`, `skill`
-  - `status` 또는 `manifest_status` (`approved` 행만 설치 대상)
-
-## 출력 산출물
-
-- `verify-parallel-proof`:
-  - `--out`: 태스크별 strict 점검 결과 TSV
-  - `--summary`: stage별 요약 JSON
-  - 자동 집계: summary 경로 기준 `parallel_proof.summary.json`
-- `install-approved`:
-  - `--report`(기본: manifest 폴더 `install.report.tsv`): 설치 실행/실패 감사 리포트
-
-## 구조 gate 의미
-
-- `install-approved`는 승인 항목에 대해 `skill_ref/repo/skill` 정합성 오류를 차단합니다.
-- 구조 게이트와 승인 판단은 분리됩니다. 승인 판단은 AI가 담당하고, 스크립트는 설치 직전 정합성만 강제합니다.
-
-## 병렬 증거 실패 코드
-
-- `missing_task_coverage`
-- `task_not_in_queue`
-- `task_ref_mismatch`
-- `expected_stage_mismatch`
-- `invalid_time_range`
-- `serial_execution_detected`
-- `insufficient_unique_workers`
-- `missing_worker_metadata`
-
-전역 strict 판정 메모:
-- `insufficient_unique_workers`, `serial_execution_detected`는 queue `task_id`가 2개 이상일 때만 평가됩니다.
-- queue `task_id`가 1개면 태스크 단위 검증(`missing_worker_metadata`, `invalid_time_range` 등)만 적용됩니다.
-
-## 명령어
+아래 예시는 1~6단계를 한 번에 실행합니다.
 
 ```bash
-# 1) 병렬 실행 증거 검증
-bash "$SKILLS_BATCH_OPS_SCRIPT" verify-parallel-proof \
-  --stage discovery \
-  --queue <review_discovery.queue.tsv> \
-  --out <discovery_parallel_proof.tsv> \
-  --summary <discovery_parallel_summary.json> \
-  <worker_1.tsv> <worker_2.tsv>
+RUN_DIR=".agents/skills-batch-ops/runs/$(date -u +%Y%m%d_%H%M%S)"
+mkdir -p "$RUN_DIR"
 
-# 2) 승인 항목 설치 (parallel_proof.summary.json passed=true 필요)
-bash "$SKILLS_BATCH_OPS_SCRIPT" install-approved \
-  --manifest <review_manifest.ai.tsv> \
-  --proof <parallel_proof.summary.json> \
-  --report <install.report.tsv> \
+python3 "$SBP_SCRIPT" run \
+  --project-root "$(pwd)" \
+  --run-dir "$RUN_DIR" \
+  --find-input "$RUN_DIR/find_output.txt" \
+  --popular-input "$RUN_DIR/popular_output.html" \
+  --web-input "$RUN_DIR/web_candidates.tsv" \
+  --min-methods 2 \
+  --limit 8 \
   --dry-run
-
-# 3) (선택) AI가 증거/설치 리포트를 읽어 감사 로그 생성
 ```
 
-## install-approved 옵션
+`run`이 생성하는 기본 산출물:
+- `project_profile.tsv`
+- `candidates.find.tsv`
+- `candidates.popular.tsv`
+- `candidates.web.tsv`
+- `candidates.merged.tsv`
+- `review_content.tsv`
+- `review_manifest.ai.tsv`
+- `install.report.tsv`
 
-- `--proof`: 병렬 증거 집계 파일. 미지정 시 manifest 폴더의 `parallel_proof.summary.json` 사용
-- `--report`: 설치 리포트 경로. 미지정 시 manifest 폴더의 `install.report.tsv` 사용
-- `--dry-run`: 실제 설치 없이 설치 대상/명령 기록만 생성
-- `--no-yes`: `npx skills add ... -y` 대신 확인 프롬프트 허용 모드로 실행
+## Input Contracts
 
-## 실패 동작
+### `--find-input`
+- `find-skills` 실행 결과 텍스트 파일.
+- 라인 중 `owner/repo@skill` 패턴과 `installs` 수치를 자동 추출합니다.
 
-- `verify-parallel-proof`: strict 조건 미충족 시 리포트/요약 파일을 남기고 non-zero 종료
-- `install-approved`: 승인 대상 중 하나라도 설치 실패 시 전체를 실패로 처리하고 non-zero 종료
+### `--popular-input`
+- 인기 스킬 페이지 HTML/텍스트 덤프 파일.
+- `source`, `skillId`, `installs` 필드를 파싱합니다.
 
-## Removed (Gate-Only)
+### `--web-input`
+- 인터넷 검색 결과를 정리한 TSV/CSV 파일.
+- 권장 헤더:
 
-아래는 더 이상 제공하지 않습니다.
+```tsv
+skill_ref	repo	skill	installs	evidence_url	evidence_note
+vercel-labs/skills@find-skills	vercel-labs/skills	find-skills	238456	https://...	Official discovery helper
+```
 
-- `run`
-- `validate-content`
-- `audit`
-- `prepare-ai-discovery`
-- `merge-ai-discovery`
-- `prepare-ai-reviews`
-- `merge-ai-reviews`
-- `apply-ai-reviews`
-- `install`
-- `collect-find`
-- `collect-top`
-- `collect-github`
-- `import-web`
-- `merge`
-- `collect`
+- `skill_ref`만 있어도 되고, `repo+skill` 조합으로도 입력할 수 있습니다.
+
+## Commands
+
+### `analyze-project`
+
+```bash
+python3 "$SBP_SCRIPT" analyze-project \
+  --project-root "$(pwd)" \
+  --out "$RUN_DIR/project_profile.tsv"
+```
+
+프로젝트 기술 스택/키워드를 추출합니다.
+
+### `collect-find`
+
+```bash
+python3 "$SBP_SCRIPT" collect-find \
+  --input "$RUN_DIR/find_output.txt" \
+  --out "$RUN_DIR/candidates.find.tsv"
+```
+
+### `collect-popular`
+
+```bash
+python3 "$SBP_SCRIPT" collect-popular \
+  --input "$RUN_DIR/popular_output.html" \
+  --out "$RUN_DIR/candidates.popular.tsv"
+```
+
+### `collect-web`
+
+```bash
+python3 "$SBP_SCRIPT" collect-web \
+  --input "$RUN_DIR/web_candidates.tsv" \
+  --out "$RUN_DIR/candidates.web.tsv"
+```
+
+### `merge-candidates`
+
+```bash
+python3 "$SBP_SCRIPT" merge-candidates \
+  --out "$RUN_DIR/candidates.merged.tsv" \
+  "$RUN_DIR/candidates.find.tsv" \
+  "$RUN_DIR/candidates.popular.tsv" \
+  "$RUN_DIR/candidates.web.tsv"
+```
+
+### `validate-content`
+
+```bash
+python3 "$SBP_SCRIPT" validate-content \
+  --candidates "$RUN_DIR/candidates.merged.tsv" \
+  --out "$RUN_DIR/review_content.tsv"
+```
+
+각 후보의 원격 저장소에서 `SKILL.md`를 가져와 frontmatter(`name`, `description`)를 점검합니다.
+
+### `build-manifest`
+
+```bash
+python3 "$SBP_SCRIPT" build-manifest \
+  --merged "$RUN_DIR/candidates.merged.tsv" \
+  --content-report "$RUN_DIR/review_content.tsv" \
+  --project-profile "$RUN_DIR/project_profile.tsv" \
+  --out "$RUN_DIR/review_manifest.ai.tsv" \
+  --min-methods 2 \
+  --limit 8
+```
+
+`content_status=passed` + 멀티소스 조건(`min_methods`)을 만족한 항목만 `approved`로 생성합니다.
+
+### `install-manifest`
+
+```bash
+python3 "$SBP_SCRIPT" install-manifest \
+  --manifest "$RUN_DIR/review_manifest.ai.tsv" \
+  --report "$RUN_DIR/install.report.tsv" \
+  --dry-run
+```
+
+실설치 시 `--dry-run`을 제거하세요.
+
+## Decision Rules
+
+- `SKILL.md` 검증 실패(`content_status!=passed`)는 `rejected`.
+- 검증 통과 + `method_count >= min_methods`만 `approved`.
+- `limit` 초과 승인 후보는 `pending`으로 조정합니다.
+
+## Legacy Gate-Only Script
+
+기존 외부 오케스트레이터 호환이 필요하면 아래 레거시 스크립트를 계속 사용할 수 있습니다.
+
+- `scripts/skills_batch_ops.sh`
+- 주요 커맨드: `verify-parallel-proof`, `install-approved`
+
+새 파이프라인(`skills_batch_pipeline.py`)이 기본 경로이며, 레거시는 호환 목적입니다.
+
+## Smoke Test
+
+```bash
+bash "$HOME/.agents/skills/skills-batch-ops/tests/test_skills_batch_ops.sh"
+bash "$HOME/.agents/skills/skills-batch-ops/tests/test_skills_batch_pipeline.sh"
+python3 "$HOME/.agents/skills/skills-batch-ops/scripts/skills_batch_pipeline.py" --help
+```

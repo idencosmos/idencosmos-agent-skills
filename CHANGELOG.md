@@ -10,3 +10,5 @@ All notable changes to this repository will be documented in this file.
 - Prevent `run` from re-ingesting `.agents/skills-batch-ops/runs` artifacts.
 - Update `skills-batch-ops` docs for install-path and repo-path compatible execution.
 - Add CI frontmatter/name validation and `npx skills` install smoke tests.
+- Rebuild `skills-batch-ops` as a multi-source discovery/review/install pipeline (`skills_batch_pipeline.py`) with mandatory `SKILL.md` content verification before approval/install.
+- Add offline regression tests for `skills_batch_pipeline.py` (`tests/test_skills_batch_pipeline.sh`).
