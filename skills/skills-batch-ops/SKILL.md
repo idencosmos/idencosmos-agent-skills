@@ -1,6 +1,6 @@
 ---
 name: skills-batch-ops
-description: 프로젝트에 맞는 스킬을 찾아 설치해야 할 때 사용합니다. 프로젝트 분석 후 (1) find-skills 결과, (2) 인기/사용량 기반 후보, (3) 인터넷 검색 후보를 함께 수집하고, 후보별 실제 SKILL.md 본문까지 검토한 뒤 승인 항목만 설치합니다.
+description: 프로젝트에 맞는 스킬을 찾아 설치해야 할 때 사용합니다. (1) 프로젝트 분석, (2) find-skills 후보 수집, (3) 인기/사용량 기반 후보 수집, (4) 인터넷 검색 후보 수집, (5) 후보별 실제 SKILL.md 본문 검토, (6) 승인 항목 설치를 수행합니다.
 ---
 
 # Skills Batch Ops
@@ -13,6 +13,13 @@ description: 프로젝트에 맞는 스킬을 찾아 설치해야 할 때 사용
 4. 인터넷 검색 기반 후보 수집
 5. 2~4번 후보의 실제 `SKILL.md` 내용 검증
 6. 승인(`approved`) 후보 설치
+
+필수 실행 계약(권장 기본 경로):
+- 기본 실행은 `collect-sources-live --run-after-collect --dry-run`으로 시작합니다.
+- 2~4단계 탐색 소스(`find/popular/web`) 중 하나라도 비면 실패로 처리합니다.
+- 5단계 검증(`validate-content`)을 통과하지 못한 후보는 설치하지 않습니다.
+- 6단계 설치는 `review_manifest.ai.tsv`에서 `approved`만 대상으로 수행합니다.
+- 실설치는 dry-run 결과를 검토한 뒤에만 진행합니다.
 
 핵심 원칙:
 - 3개 탐색 채널(`find`, `popular`, `web`)을 모두 사용합니다.
@@ -29,11 +36,14 @@ SBP_SCRIPT="${SBP_SCRIPT:-$HOME/.agents/skills/skills-batch-ops/scripts/skills_b
 if [[ ! -x "$SBP_SCRIPT" && -x "$(pwd)/idencosmos-agent-skills/skills/skills-batch-ops/scripts/skills_batch_pipeline.py" ]]; then
   SBP_SCRIPT="$(pwd)/idencosmos-agent-skills/skills/skills-batch-ops/scripts/skills_batch_pipeline.py"
 fi
+if [[ ! -x "$SBP_SCRIPT" && -x "$(pwd)/idencosmos-agents-skills/skills/skills-batch-ops/scripts/skills_batch_pipeline.py" ]]; then
+  SBP_SCRIPT="$(pwd)/idencosmos-agents-skills/skills/skills-batch-ops/scripts/skills_batch_pipeline.py"
+fi
 if [[ ! -x "$SBP_SCRIPT" && -x "$(pwd)/skills/skills-batch-ops/scripts/skills_batch_pipeline.py" ]]; then
   SBP_SCRIPT="$(pwd)/skills/skills-batch-ops/scripts/skills_batch_pipeline.py"
 fi
 if [[ ! -x "$SBP_SCRIPT" ]]; then
-  echo "error: set SBP_SCRIPT to skills-batch-ops/scripts/skills_batch_pipeline.py (or idencosmos-agent-skills/... path)" >&2
+  echo "error: set SBP_SCRIPT to skills-batch-ops/scripts/skills_batch_pipeline.py (or idencosmos-agent-skills/... or idencosmos-agents-skills/... path)" >&2
   exit 1
 fi
 ```
@@ -41,12 +51,11 @@ fi
 ## Preflight (필수)
 
 ```bash
-# 1) discovery 명령이 실행 가능한지 확인
-npx --yes skills find "test" >/dev/null
+# 1) find-skills 스킬 설치 확인 (이미 설치되어 있으면 idempotent)
+npx --yes skills add vercel-labs/skills --skill find-skills -y
 
-# 2) find-skills 스킬 설치가 필요한 환경이면 먼저 설치
-# (이미 설치되어 있으면 skip 가능)
-npx skills add vercel-labs/skills --skill find-skills -y
+# 2) discovery 명령이 실행 가능한지 확인
+npx --yes skills find "test" >/dev/null
 
 # 3) 파이프라인 엔트리포인트 확인
 python3 "$SBP_SCRIPT" --help >/dev/null
@@ -224,6 +233,7 @@ python3 "$SBP_SCRIPT" validate-content \
 검증은 이름 확인을 넘어서 본문 품질도 함께 확인합니다.
 
 - 경로 후보: `main|master` 브랜치의 `/SKILL.md`, `/skills/<skill>/SKILL.md`, `/<skill>/SKILL.md`
+- 기본 `main|master`에서 찾지 못하면 저장소 `default_branch`를 조회해 동일 경로를 재시도합니다.
 
 - frontmatter `name` / `description` 유효성
 - 본문 길이(너무 짧은 문서 차단)
@@ -245,6 +255,7 @@ python3 "$SBP_SCRIPT" build-manifest \
 
 `content_status=passed` + 멀티소스 조건(`min_methods`) + 프로젝트 키워드 조건(`min_project_keyword_hits`)을 만족한 항목만 `approved`로 생성합니다.
 `project_keyword_hits`는 프로젝트 키워드와 스킬 본문/설명 기반 매칭 근거를 제공합니다. 키워드 게이트를 완화하려면 `--min-project-keyword-hits 0`을 사용하세요.
+키워드 추출은 영문/한글 토큰을 함께 사용하므로 한국어 README/설명 기반 프로젝트에서도 적합성 게이트가 동작합니다.
 
 ### `install-manifest`
 
@@ -307,7 +318,8 @@ awk -F '\t' 'NR==1 || $11=="approved"' "$RUN_DIR/review_manifest.ai.tsv"
 ## Smoke Test
 
 ```bash
-bash "$HOME/.agents/skills/skills-batch-ops/tests/test_skills_batch_ops.sh"
-bash "$HOME/.agents/skills/skills-batch-ops/tests/test_skills_batch_pipeline.sh"
-python3 "$HOME/.agents/skills/skills-batch-ops/scripts/skills_batch_pipeline.py" --help
+SBP_ROOT="$(cd "$(dirname "$SBP_SCRIPT")/.." && pwd)"
+bash "$SBP_ROOT/tests/test_skills_batch_ops.sh"
+bash "$SBP_ROOT/tests/test_skills_batch_pipeline.sh"
+python3 "$SBP_ROOT/scripts/skills_batch_pipeline.py" --help
 ```

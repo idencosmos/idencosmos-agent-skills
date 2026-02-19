@@ -288,7 +288,7 @@ TSV
   assert_contains "$tmp/review_manifest.ai.tsv" $'\tapproved\tapproved\tapprove\t' || return 1
   assert_contains "$tmp/review_manifest.ai.tsv" $'\trejected\trejected\treject\t' || return 1
   assert_row_count "$tmp/install.report.tsv" 1 || return 1
-  assert_contains "$tmp/install.report.tsv" $'\tdry-run\tnpx skills add vercel-labs/skills --skill find-skills -y\tdry-run' || return 1
+  assert_contains "$tmp/install.report.tsv" $'\tdry-run\tnpx --yes skills add vercel-labs/skills --skill find-skills -y\tdry-run' || return 1
 }
 
 test_manifest_project_keyword_gate_process() {
@@ -339,7 +339,7 @@ test_parser_root_skill_and_crlf_support_process() {
   local tmp
   tmp="$(mktemp -d)"
 
-  PIPELINE_SCRIPT_PATH="$PIPELINE_SCRIPT" python3 - > "$tmp/parser_check.txt" <<'PY'
+  PIPELINE_SCRIPT_PATH="$PIPELINE_SCRIPT" TMP_PROJECT_PATH="$tmp/project" python3 - > "$tmp/parser_check.txt" <<'PY'
 import importlib.util
 import os
 from pathlib import Path
@@ -353,7 +353,12 @@ spec.loader.exec_module(module)
 
 urls = module.candidate_skill_md_urls("example/repo", "skill-alpha")
 assert urls[0] == "https://raw.githubusercontent.com/example/repo/main/SKILL.md"
-assert urls[1] == "https://raw.githubusercontent.com/example/repo/master/SKILL.md"
+assert urls[3] == "https://raw.githubusercontent.com/example/repo/master/SKILL.md"
+
+branch_urls = module.candidate_skill_md_urls("example/repo", "skill-alpha", branches=["develop", "main"])
+assert branch_urls[0] == "https://raw.githubusercontent.com/example/repo/develop/SKILL.md"
+assert "https://raw.githubusercontent.com/example/repo/main/SKILL.md" in branch_urls
+assert "https://raw.githubusercontent.com/example/repo/master/SKILL.md" in branch_urls
 
 parsed = module.parse_skill_markdown(
     "---\r\nname: skill-alpha\r\ndescription: Demo skill\r\n---\r\n# Heading\r\n\r\nBody line.\r\n"
@@ -363,6 +368,24 @@ name, description, body = parsed
 assert name == "skill-alpha"
 assert description == "Demo skill"
 assert "Body line." in body
+
+parsed_bom = module.parse_skill_markdown(
+    "\ufeff---\nname: skill-alpha\ndescription: Demo skill\n---\nBody line.\n"
+)
+assert parsed_bom is not None
+
+korean_keywords = module.extract_keywords("자동화 테스트 파이프라인 품질검증 자동화")
+assert "자동화" in korean_keywords
+assert "테스트" in korean_keywords
+
+tmp_project = Path(os.environ["TMP_PROJECT_PATH"])
+tmp_project.mkdir(parents=True, exist_ok=True)
+(tmp_project / "README.md").write_text("# 데모\n자동화 테스트 파이프라인\n", encoding="utf-8")
+profile_out = tmp_project / "project_profile.tsv"
+module.analyze_project(tmp_project, profile_out)
+profile_text = profile_out.read_text(encoding="utf-8")
+assert "자동화" in profile_text
+assert "테스트" in profile_text
 print("ok")
 PY
 

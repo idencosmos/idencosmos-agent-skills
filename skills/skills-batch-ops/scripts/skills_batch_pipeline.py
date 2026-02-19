@@ -87,7 +87,9 @@ INSTALL_REPORT_HEADER = [
 
 SKILL_REF_RE = re.compile(r"^(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)@(?P<skill>[A-Za-z0-9_.-]+)$")
 FRONTMATTER_RE = re.compile(r"^---\n(?P<body>.*?)\n---\n?", re.DOTALL)
-TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
+# Support both English-like tokens and Korean tokens so project/content
+# keyword matching works for multilingual repositories.
+TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}|[가-힣][가-힣0-9_-]{1,}")
 BODY_PLACEHOLDER_RE = re.compile(r"\b(TODO|TBD|PLACEHOLDER)\b", re.IGNORECASE)
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 FIND_LINE_RE = re.compile(
@@ -481,7 +483,7 @@ def merge_candidates(inputs: list[Path], out: Path) -> None:
 
 
 def parse_skill_markdown(text: str) -> tuple[str, str, str] | None:
-    normalized = normalize_newlines(text)
+    normalized = normalize_newlines(text).lstrip("\ufeff")
     match = FRONTMATTER_RE.match(normalized)
     if not match:
         return None
@@ -501,15 +503,17 @@ def parse_skill_markdown(text: str) -> tuple[str, str, str] | None:
     return name, description, body
 
 
-def candidate_skill_md_urls(repo: str, skill: str) -> list[str]:
-    return [
-        f"https://raw.githubusercontent.com/{repo}/main/SKILL.md",
-        f"https://raw.githubusercontent.com/{repo}/master/SKILL.md",
-        f"https://raw.githubusercontent.com/{repo}/main/skills/{skill}/SKILL.md",
-        f"https://raw.githubusercontent.com/{repo}/master/skills/{skill}/SKILL.md",
-        f"https://raw.githubusercontent.com/{repo}/main/{skill}/SKILL.md",
-        f"https://raw.githubusercontent.com/{repo}/master/{skill}/SKILL.md",
-    ]
+def candidate_skill_md_urls(repo: str, skill: str, branches: list[str] | None = None) -> list[str]:
+    urls: list[str] = []
+    for branch in dedupe_keep_order((branches or []) + ["main", "master"]):
+        urls.extend(
+            [
+                f"https://raw.githubusercontent.com/{repo}/{branch}/SKILL.md",
+                f"https://raw.githubusercontent.com/{repo}/{branch}/skills/{skill}/SKILL.md",
+                f"https://raw.githubusercontent.com/{repo}/{branch}/{skill}/SKILL.md",
+            ]
+        )
+    return urls
 
 
 def fetch_text(url: str, timeout_sec: int = 10) -> str:
@@ -524,6 +528,7 @@ def validate_content(candidates: Path, out: Path, strict: bool) -> int:
     failed = 0
 
     seen: set[str] = set()
+    default_branch_cache: dict[str, str] = {}
     for skill_ref, repo, skill in iter_skill_refs(rows):
         if skill_ref in seen:
             continue
@@ -538,7 +543,15 @@ def validate_content(candidates: Path, out: Path, strict: bool) -> int:
         content_keywords = ""
         reason = "skill_md_not_found"
 
-        for url in candidate_skill_md_urls(repo, skill):
+        default_branch = default_branch_cache.get(repo)
+        if default_branch is None:
+            default_branch = fetch_repo_default_branch(repo)
+            default_branch_cache[repo] = default_branch
+        branch_candidates = ["main", "master"]
+        if default_branch:
+            branch_candidates = dedupe_keep_order([default_branch] + branch_candidates)
+
+        for url in candidate_skill_md_urls(repo, skill, branches=branch_candidates):
             try:
                 text = fetch_text(url)
             except HTTPError as exc:
@@ -735,6 +748,17 @@ def fetch_json(url: str, timeout_sec: int = 15) -> object:
     with urlopen(req, timeout=timeout_sec) as resp:
         raw = resp.read().decode("utf-8", errors="replace")
     return json.loads(raw)
+
+
+def fetch_repo_default_branch(repo: str, api_base: str = "https://api.github.com", timeout_sec: int = 10) -> str:
+    url = f"{api_base.rstrip('/')}/repos/{repo}"
+    try:
+        payload = fetch_json(url, timeout_sec=max(int(timeout_sec), 1))
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError):
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("default_branch", "")).strip()
 
 
 def discover_repo_skills_from_github(
@@ -1274,7 +1298,7 @@ def install_manifest(manifest: Path, report: Path, dry_run: bool, yes: bool) -> 
                 reason = "content_status is not passed"
                 failures += 1
             else:
-                cmd = ["npx", "skills", "add", repo, "--skill", skill]
+                cmd = ["npx", "--yes", "skills", "add", repo, "--skill", skill]
                 if yes:
                     cmd.append("-y")
                 command = " ".join(cmd)
