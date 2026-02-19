@@ -6,11 +6,12 @@ END_MARKER="# END project-agent-factory managed agents"
 PLAN_HEADER_CURRENT=$'agent_id\trole_name\tpriority\treason\tconfig_relpath\tdescription\tdeveloper_instructions\tmodel\tmodel_reasoning_effort\tsandbox_mode'
 PLAN_HEADER_LEGACY=$'agent_id\trole_name\tpriority\treason\tconfig_relpath\tdescription\tprompt\tmodel\tmodel_reasoning_effort\tsandbox_mode'
 PLAN_INSTRUCTIONS_COLUMN="developer_instructions"
+SOURCE_REVIEW_HEADER=$'source_id\tsource_type\turl\tchecked_at_utc\trelevance_note\tkey_constraints'
 
 usage() {
   cat <<'USAGE'
 Usage:
-  agent_factory.sh apply-plan --project-root PATH --plan PATH [--out-dir PATH]
+  agent_factory.sh apply-plan --project-root PATH --plan PATH [--source-review PATH] [--out-dir PATH]
 USAGE
 }
 
@@ -183,9 +184,6 @@ validate_plan_schema() {
       minimal|low|medium|high|xhigh) ;;
       *) die "plan row $line_no: model_reasoning_effort must be one of minimal|low|medium|high|xhigh" ;;
     esac
-    if [[ "$model_reasoning_effort" == "xhigh" ]]; then
-      printf 'warn: plan row %s uses deprecated model_reasoning_effort=xhigh; prefer high for new plans\n' "$line_no" >&2
-    fi
     case "$sandbox_mode" in
       read-only|workspace-write|danger-full-access) ;;
       *) die "plan row $line_no: sandbox_mode must be one of read-only|workspace-write|danger-full-access" ;;
@@ -199,6 +197,136 @@ validate_plan_schema() {
 
   duplicate_config="$(awk -F'\t' 'NR>1 {if (++seen[$5] > 1) {print $5; exit}}' "$plan")"
   [[ -z "$duplicate_config" ]] || die "duplicate config_relpath in plan: $duplicate_config"
+}
+
+validate_source_review_schema() {
+  local source_review="$1"
+  local header
+
+  [[ -f "$source_review" ]] || die "source_review.tsv file not found: $source_review"
+  header="$(head -n 1 "$source_review" | tr -d '\r')"
+  [[ "$header" == "$SOURCE_REVIEW_HEADER" ]] || die "invalid source_review.tsv header. expected: $SOURCE_REVIEW_HEADER"
+
+  awk -F'\t' '
+    NR == 1 { next }
+    {
+      line = $0
+      sub(/\r$/, "", line)
+      col_count = split(line, cols, "\t")
+      if (col_count != 6) {
+        printf("error: source_review row %d must have exactly 6 columns\n", NR) > "/dev/stderr"
+        bad = 1
+        next
+      }
+
+      source_id = cols[1]
+      source_type = cols[2]
+      url = cols[3]
+      checked_at_utc = cols[4]
+      relevance_note = cols[5]
+      key_constraints = cols[6]
+
+      if (source_id == "" || source_type == "" || url == "" || checked_at_utc == "" || relevance_note == "" || key_constraints == "") {
+        printf("error: source_review row %d has empty required field\n", NR) > "/dev/stderr"
+        bad = 1
+      }
+
+      if (source_id !~ /^(official|github|web)-[0-9]+$/) {
+        printf("error: source_review row %d has invalid source_id: %s\n", NR, source_id) > "/dev/stderr"
+        bad = 1
+      }
+
+      if (source_type !~ /^(official|github|web)$/) {
+        printf("error: source_review row %d has invalid source_type: %s\n", NR, source_type) > "/dev/stderr"
+        bad = 1
+      }
+
+      split(source_id, id_parts, "-")
+      if (id_parts[1] != source_type) {
+        printf("error: source_review row %d source_id/source_type mismatch: %s vs %s\n", NR, source_id, source_type) > "/dev/stderr"
+        bad = 1
+      }
+
+      if (checked_at_utc !~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$/) {
+        printf("error: source_review row %d has invalid checked_at_utc: %s\n", NR, checked_at_utc) > "/dev/stderr"
+        bad = 1
+      }
+
+      if (source_type == "official" && url !~ /^https:\/\/(developers\.openai\.com|openai\.com)\//) {
+        printf("error: source_review row %d official URL must be openai domain: %s\n", NR, url) > "/dev/stderr"
+        bad = 1
+      }
+      if (source_type == "github" && url !~ /^https:\/\/(github\.com|raw\.githubusercontent\.com)\//) {
+        printf("error: source_review row %d github URL must be github domain: %s\n", NR, url) > "/dev/stderr"
+        bad = 1
+      }
+      if (source_type == "web" && url ~ /^https:\/\/(github\.com|raw\.githubusercontent\.com)\//) {
+        printf("error: source_review row %d web URL must not be github domain: %s\n", NR, url) > "/dev/stderr"
+        bad = 1
+      }
+
+      if (++seen_source_id[source_id] > 1) {
+        printf("error: source_review duplicate source_id detected: %s\n", source_id) > "/dev/stderr"
+        bad = 1
+      }
+      if (++seen_url[url] > 1) {
+        printf("error: source_review duplicate url detected: %s\n", url) > "/dev/stderr"
+        bad = 1
+      }
+
+      seen_type[source_type] = 1
+      rows++
+    }
+    END {
+      if (rows == 0) {
+        print "error: source_review.tsv must include at least one source row" > "/dev/stderr"
+        bad = 1
+      }
+      if (!seen_type["official"] || !seen_type["github"] || !seen_type["web"]) {
+        print "error: source_review.tsv must include official/github/web source types" > "/dev/stderr"
+        bad = 1
+      }
+      if (bad) {
+        exit 1
+      }
+    }
+  ' "$source_review" || die "invalid source_review.tsv: $source_review"
+}
+
+validate_plan_sources_against_source_review() {
+  local plan="$1"
+  local source_review="$2"
+
+  awk -F'\t' '
+    FNR == NR {
+      if (FNR == 1) {
+        next
+      }
+      source_id = $1
+      sub(/\r$/, "", source_id)
+      source_ids[source_id] = 1
+      next
+    }
+    FNR == 1 {
+      next
+    }
+    {
+      reason = $4
+      while (match(reason, /(official|github|web)-[0-9]+/)) {
+        token = substr(reason, RSTART, RLENGTH)
+        if (!(token in source_ids)) {
+          printf("error: plan row %d references unknown source_id: %s\n", FNR, token) > "/dev/stderr"
+          bad = 1
+        }
+        reason = substr(reason, RSTART + RLENGTH)
+      }
+    }
+    END {
+      if (bad) {
+        exit 1
+      }
+    }
+  ' "$source_review" "$plan" || die "plan/source_review linkage validation failed"
 }
 
 write_apply_report_header() {
@@ -536,10 +664,15 @@ apply_plan_pipeline() {
   local project_root="$1"
   local plan="$2"
   local out_dir="$3"
+  local source_review="${4:-}"
   local report_file="$out_dir/apply_report.tsv"
   local scope_file="$out_dir/scope_validation.tsv"
 
   validate_plan_schema "$plan"
+  if [[ -n "$source_review" ]]; then
+    validate_source_review_schema "$source_review"
+    validate_plan_sources_against_source_review "$plan" "$source_review"
+  fi
 
   mkdir -p "$out_dir"
   render_config "$project_root" "$plan" "$report_file"
@@ -547,6 +680,9 @@ apply_plan_pipeline() {
 
   log "run_dir: $out_dir"
   log "plan: $plan"
+  if [[ -n "$source_review" ]]; then
+    log "source_review: $source_review"
+  fi
   log "report: $report_file"
   log "scope: $scope_file"
 }
@@ -554,6 +690,7 @@ apply_plan_pipeline() {
 parse_apply_plan_args() {
   local project_root=""
   local plan=""
+  local source_review=""
   local out_dir=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -563,6 +700,10 @@ parse_apply_plan_args() {
         ;;
       --plan)
         plan="$2"
+        shift 2
+        ;;
+      --source-review)
+        source_review="$2"
         shift 2
         ;;
       --out-dir)
@@ -581,6 +722,17 @@ parse_apply_plan_args() {
 
   project_root="$(resolve_dir "$project_root")"
   plan="$(resolve_path "$plan")"
+  if [[ -n "$source_review" ]]; then
+    [[ -f "$source_review" ]] || die "source_review.tsv file not found: $source_review"
+    source_review="$(resolve_path "$source_review")"
+  else
+    source_review="$(dirname "$plan")/source_review.tsv"
+    if [[ -f "$source_review" ]]; then
+      source_review="$(resolve_path "$source_review")"
+    else
+      source_review=""
+    fi
+  fi
 
   if [[ -z "$out_dir" ]]; then
     out_dir="$project_root/.agents/project-agent-factory/runs/$(now_stamp)"
@@ -588,7 +740,7 @@ parse_apply_plan_args() {
   out_dir="$(resolve_path "$out_dir")"
   is_within_project "$project_root" "$out_dir" || die "--out-dir must be within project root"
 
-  apply_plan_pipeline "$project_root" "$plan" "$out_dir"
+  apply_plan_pipeline "$project_root" "$plan" "$out_dir" "$source_review"
 }
 
 main() {

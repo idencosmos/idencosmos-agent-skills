@@ -22,7 +22,7 @@ description: 프로젝트에 필요한 Codex 멀티 에이전트를 설계/생�
 - `references/codex-multi-agent-notes.md`로 공식 스펙을 먼저 확인하세요.
 - GitHub 사례 + 인터넷 사례를 최소 1개씩 수집해 `source_review.tsv`에 남기세요.
 - `agent_plan.tsv` 각 행의 `reason`에는 프로젝트 근거와 소스 ID를 함께 적으세요.
-- 반영 단계는 항상 `apply-plan` 단일 커맨드로 실행하세요.
+- 반영 단계는 항상 `apply-plan` 단일 커맨드로 실행하고 `--source-review`를 함께 전달해 근거 검증을 자동화하세요.
 - 생성/갱신 경로를 `<project-root>/.codex/` 하위로 강제하세요.
 - 실행 산출물은 `<project-root>/.agents/project-agent-factory/runs/<timestamp>/`에 기록하세요.
 - 기존 `.codex/config.toml`은 전체 덮어쓰지 말고 관리 블록만 갱신하세요.
@@ -75,21 +75,23 @@ mkdir -p "$RUN_DIR"
 ## Step 2) 공식 문서 + GitHub/인터넷 사례 검증
 
 먼저 `references/codex-multi-agent-notes.md`와 `references/multi-agent-case-sources.md`를 읽으세요.
-그리고 `source_review.tsv`를 생성하세요.
+그리고 실제 원문을 열람한 뒤 `source_review.tsv`를 생성하세요.
 
 ```bash
 NOW_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 cat > "$RUN_DIR/source_review.tsv" <<TSV
 source_id	source_type	url	checked_at_utc	relevance_note	key_constraints
 official-1	official	https://developers.openai.com/codex/multi-agent	$NOW_UTC	multi_agent 활성화와 agent 설정 키 확인	experimental 기능/버전 차이 확인 필요
-github-1	github	https://github.com/openai/codex/pull/8783	$NOW_UTC	agent control 명령 기반 오케스트레이션 구현 사례 확인	experimental 플래그와 권한/스코프 관리 필요
-web-1	web	https://cookbook.openai.com/examples/agents_sdk/parallel_agents	$NOW_UTC	병렬 에이전트 분해 패턴을 역할 설계에 참고	샘플 코드 참고용(일부 레거시/비프로덕션 경고)이며 Codex 설정 키는 공식 문서로 재검증
+github-1	github	https://github.com/openai/codex/pull/11917	$NOW_UTC	config_file 기반 역할 분리 구성 근거 확인	PR 기준이므로 현재 CLI 버전과 교차 확인 필요
+web-1	web	https://cookbook.openai.com/examples/agents_sdk/parallel_agents	$NOW_UTC	병렬 에이전트 분해 패턴을 역할 설계에 참고	Codex 설정 키는 공식 문서로 재검증
 TSV
 ```
 
 `source_type=official|github|web` 3종류를 모두 포함하세요.
 `source_type=web`는 GitHub 외 도메인 URL만 사용하세요.
 `source_type=github`는 GitHub URL만 사용하세요.
+`checked_at_utc`는 실제 확인 시각을 기록하세요(형식: `YYYY-MM-DDTHH:MM:SSZ`).
+정적 템플릿만 복사하지 말고, 각 URL을 실제로 열어 `relevance_note`를 프로젝트 맥락으로 작성하세요.
 네트워크가 막히면 `relevance_note`에 `blocked`를 명시하고 부분 검증으로 보고하세요.
 
 ## Step 3) 멀티 에이전트 계획 생성 (`agent_plan.tsv`)
@@ -108,26 +110,12 @@ agent_id	role_name	priority	reason	config_relpath	description	developer_instruct
 - `config_relpath`는 하위 디렉터리를 허용하지 않습니다(예: `agents/paf_explorer.toml` 허용, `agents/backend/paf_explorer.toml` 금지).
 - 공식 Codex 스펙은 `config_file`에 일반 상대경로를 허용하지만, 이 스킬은 경로 안전성과 정리 자동화를 위해 `agents/*.toml` 단일 깊이로 제한합니다.
 - `agent_id`는 영문/숫자/`._-`만 허용됩니다.
-- `model_reasoning_effort`: `minimal|low|medium|high|xhigh` (`xhigh`는 deprecated이므로 신규 계획은 `high` 우선)
+- `model_reasoning_effort`: `minimal|low|medium|high|xhigh` (모델/버전별 지원 범위는 공식 문서로 확인)
 - `sandbox_mode`: `read-only|workspace-write|danger-full-access`
 - 헤더 외 추가 컬럼은 허용되지 않습니다.
 - `agent_id`에 `.`이 포함돼도 `.codex/config.toml`에는 `[agents."<agent_id>"]`로 안전하게 기록되어 TOML 중첩 테이블 충돌을 피합니다.
-- `reason`에는 `project_profile.md` 근거 + `source_review.tsv`의 `source_id`(`official-<n>|github-<n>|web-<n>`)를 포함하세요. `apply-plan`에서 형식을 검증합니다.
-
-반영 전에 `source_review.tsv` 최소 기준을 점검하세요.
-
-```bash
-awk -F'\t' '
-NR == 1 { next }
-{ seen[$2] = 1 }
-END {
-  if (!seen["official"] || !seen["github"] || !seen["web"]) {
-    print "error: source_review.tsv must include official/github/web rows" > "/dev/stderr"
-    exit 1
-  }
-}
-' "$RUN_DIR/source_review.tsv"
-```
+- `reason`에는 `project_profile.md` 근거 + `source_review.tsv`의 `source_id`(`official-<n>|github-<n>|web-<n>`)를 포함하세요.
+- `apply-plan --source-review`를 사용하면 `source_review.tsv` 스키마/도메인 규칙 + `reason`의 source_id 연결성까지 함께 검증합니다.
 
 샘플:
 
@@ -145,6 +133,7 @@ paf_implementer	Project Implementer	20	delivery-path(api+ui), source=github-1 of
 bash "$PAF_SCRIPT" apply-plan \
   --project-root "$(pwd)" \
   --plan "$RUN_DIR/agent_plan.tsv" \
+  --source-review "$RUN_DIR/source_review.tsv" \
   --out-dir "$RUN_DIR"
 ```
 
@@ -188,6 +177,7 @@ run_dir: <path>
 bash "$PAF_SCRIPT" apply-plan \
   --project-root "$(pwd)" \
   --plan <agent_plan.tsv> \
+  --source-review <source_review.tsv> \
   --out-dir <run-dir>
 ```
 

@@ -9,7 +9,7 @@
 3. 에이전트는 `[agents.<name>]` 블록으로 등록하며, `description`과 `config_file` 분리 구성이 가능합니다. `config_file`는 `.codex/config.toml` 기준 상대경로여야 합니다.
 4. 기본 `agent_type`은 `default`, `explorer`, `worker`입니다.
 5. 역할별 파일(`agents/*.toml`)에서는 `model`, `model_reasoning_effort`, `sandbox_mode`, `approval_policy`, `cwd`, `developer_instructions`, `env` 등을 설정할 수 있습니다.
-6. `model_reasoning_effort` 허용값은 `minimal|low|medium|high|xhigh`이며, `xhigh`는 deprecated입니다(신규 계획은 `high` 우선).
+6. `model_reasoning_effort` 허용값은 `minimal|low|medium|high|xhigh`입니다(모델/버전별 지원 범위는 공식 문서 기준으로 확인).
 7. 병렬 처리 상한은 `agents.max_threads`로 조정 가능합니다.
 8. 설정 키는 Codex 버전에 따라 alias/마이그레이션이 있을 수 있으므로, 적용 전 공식 Config Reference와 현재 CLI 버전을 교차 확인하세요.
 

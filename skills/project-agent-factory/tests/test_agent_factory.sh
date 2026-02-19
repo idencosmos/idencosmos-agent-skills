@@ -22,9 +22,17 @@ paf_explorer	Project Explorer	10	stack-map source=official-1	agents/paf_explorer
 paf.implementer	Project Implementer	20	delivery source=github-1	agents/paf_implementer.toml	Implement requested changes.	Apply scoped edits and run available checks.	gpt-5-codex	xhigh	danger-full-access
 TSV
 
+cat > "$run_dir/source_review.tsv" <<'TSV'
+source_id	source_type	url	checked_at_utc	relevance_note	key_constraints
+official-1	official	https://developers.openai.com/codex/multi-agent	2026-02-19T00:00:00Z	multi-agent 설정 키 확인	experimental 기능 여부 확인
+github-1	github	https://github.com/openai/codex/pull/11917	2026-02-19T00:01:00Z	role alias/config_file 변경 근거	PR 기준으로 버전 차이 확인
+web-1	web	https://cookbook.openai.com/examples/agents_sdk/parallel_agents	2026-02-19T00:02:00Z	역할 분해 패턴 참고	Codex 설정 키는 공식 문서로 재검증
+TSV
+
 bash "$SCRIPT_PATH" apply-plan \
   --project-root "$project_root" \
   --plan "$run_dir/agent_plan.tsv" \
+  --source-review "$run_dir/source_review.tsv" \
   --out-dir "$run_dir" >/dev/null
 
 [[ -f "$project_root/.codex/config.toml" ]]
@@ -147,6 +155,20 @@ if bash "$SCRIPT_PATH" apply-plan \
   exit 1
 fi
 
+# apply-plan should reject unknown source_id references when source_review is provided
+cat > "$run_dir/bad_reason_source_link.tsv" <<'TSV'
+agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
+paf_explorer	Project Explorer	10	unknown-link source=official-99	agents/paf_explorer.toml	Explore project structure.	Collect evidence.	gpt-5	medium	workspace-write
+TSV
+
+if bash "$SCRIPT_PATH" apply-plan \
+  --project-root "$project_root" \
+  --plan "$run_dir/bad_reason_source_link.tsv" \
+  --out-dir "$run_dir/bad_reason_source_link_run" >/dev/null 2>&1; then
+  echo "error: apply-plan should reject unknown source_id references against source_review.tsv" >&2
+  exit 1
+fi
+
 # apply-plan should reject duplicate ids/config paths
 cat > "$run_dir/bad_duplicate.tsv" <<'TSV'
 agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
@@ -204,6 +226,23 @@ if bash "$SCRIPT_PATH" apply-plan \
   --plan "$run_dir/bad_nested_config.tsv" \
   --out-dir "$run_dir/bad_nested_run" >/dev/null 2>&1; then
   echo "error: apply-plan should reject nested config_relpath" >&2
+  exit 1
+fi
+
+# apply-plan should validate source_review schema/domain constraints when explicitly provided
+cat > "$run_dir/bad_source_review.tsv" <<'TSV'
+source_id	source_type	url	checked_at_utc	relevance_note	key_constraints
+official-1	official	https://developers.openai.com/codex/multi-agent	2026-02-19T00:00:00Z	multi-agent 설정 키 확인	experimental 기능 여부 확인
+github-1	github	https://developers.openai.com/codex/config-reference	2026-02-19T00:01:00Z	github 타입 URL 검증 실패 유도	URL 도메인 규칙 위반
+web-1	web	https://cookbook.openai.com/examples/agents_sdk/parallel_agents	2026-02-19T00:02:00Z	역할 분해 패턴 참고	Codex 설정 키는 공식 문서로 재검증
+TSV
+
+if bash "$SCRIPT_PATH" apply-plan \
+  --project-root "$project_root" \
+  --plan "$run_dir/agent_plan.tsv" \
+  --source-review "$run_dir/bad_source_review.tsv" \
+  --out-dir "$run_dir/bad_source_review_run" >/dev/null 2>&1; then
+  echo "error: apply-plan should reject invalid source_review schema/domain rows" >&2
   exit 1
 fi
 
