@@ -986,6 +986,7 @@ def collect_sources_live(args: argparse.Namespace) -> int:
     candidates_find = run_dir / "candidates.find.tsv"
     candidates_popular = run_dir / "candidates.popular.tsv"
     candidates_web = run_dir / "candidates.web.tsv"
+    web_fallback_reason = ""
 
     analyze_project(project_root, project_profile)
     profile = load_project_profile_map(project_profile)
@@ -1009,20 +1010,30 @@ def collect_sources_live(args: argparse.Namespace) -> int:
         ensure_parent(web_output)
         shutil.copyfile(seed_path, web_output)
     else:
-        collect_web_candidates_from_github(
-            web_queries=web_queries,
-            out=web_output,
-            api_base=args.github_api_base,
-            repo_limit=max(args.web_repo_limit, 1),
-            skill_limit_per_repo=max(args.web_skill_limit_per_repo, 1),
-            timeout_sec=max(args.timeout_sec, 5),
-        )
-        if len(read_table(web_output)) == 0:
+        try:
+            collect_web_candidates_from_github(
+                web_queries=web_queries,
+                out=web_output,
+                api_base=args.github_api_base,
+                repo_limit=max(args.web_repo_limit, 1),
+                skill_limit_per_repo=max(args.web_skill_limit_per_repo, 1),
+                timeout_sec=max(args.timeout_sec, 5),
+            )
+        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+            web_fallback_reason = f"github-api-unavailable ({type(exc).__name__})"
             collect_web_candidates_via_find(
                 web_queries=web_queries,
                 out=web_output,
                 find_command=args.find_command,
             )
+        else:
+            if len(read_table(web_output)) == 0:
+                web_fallback_reason = "github-api-empty"
+                collect_web_candidates_via_find(
+                    web_queries=web_queries,
+                    out=web_output,
+                    find_command=args.find_command,
+                )
 
     collect_web(web_output, candidates_web)
     source_counts = {
@@ -1050,6 +1061,8 @@ def collect_sources_live(args: argparse.Namespace) -> int:
     print(f"find_output: {find_output}")
     print(f"popular_output: {popular_output}")
     print(f"web_output: {web_output}")
+    if web_fallback_reason:
+        print(f"web_fallback: {web_fallback_reason}")
     print(f"candidates_find: {candidates_find}")
     print(f"candidates_popular: {candidates_popular}")
     print(f"candidates_web: {candidates_web}")

@@ -132,7 +132,7 @@ python3 "$SBP_SCRIPT" collect-sources-live \
 1. 프로젝트 분석(`project_profile.tsv`)
 2. `npx skills find <query>` 실행 후 `find_output.txt` 생성
 3. `https://skills.sh/` 수집 후 `popular_output.html` 생성
-4. GitHub 검색 API 기반 인터넷 후보 `web_candidates.tsv` 생성
+4. GitHub 검색 API 기반 인터넷 후보 `web_candidates.tsv` 생성 (API 실패/응답 0건 시 `skills find` 기반 웹 후보로 자동 fallback)
 5. `candidates.find.tsv`, `candidates.popular.tsv`, `candidates.web.tsv`까지 정규화
 
 주요 옵션:
@@ -141,7 +141,7 @@ python3 "$SBP_SCRIPT" collect-sources-live \
 - `--web-query`: 웹 검색어 추가(여러 번 지정 가능)
 - `--find-command`: find 실행 명령 커스터마이즈 (기본 `npx skills find`)
 - `--web-mode seed --web-seed-input <path>`: 인터넷 검색 대신 사전 정리 TSV 사용(오프라인/테스트용)
-- 기본 `web-mode=github`에서 GitHub API 후보가 0건이면 `skills find` 기반 웹 후보 수집으로 자동 fallback합니다.
+- 기본 `web-mode=github`에서 GitHub API 호출이 실패하거나 후보가 0건이면 `skills find` 기반 웹 후보 수집으로 자동 fallback합니다.
 - `--allow-empty-sources`: 비어 있는 채널 허용
 - `--run-after-collect`: 수집 직후 `run` 단계 자동 실행
 - `--min-project-keyword-hits`: 승인 최소 프로젝트 키워드 히트 수 (기본 `1`, 느슨하게 하려면 `0`)
