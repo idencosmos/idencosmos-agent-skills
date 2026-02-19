@@ -20,6 +20,7 @@ description: 프로젝트에 맞는 스킬을 찾아 설치해야 할 때 사용
 - 프로젝트 키워드와 무관한 후보는 기본적으로 `approved`에 올리지 않습니다.
 - 설치 전에는 기본적으로 `--dry-run`을 먼저 실행합니다.
 - 기본 `run`은 3개 채널 중 하나라도 비어 있으면 실패합니다. 예외가 필요할 때만 `--allow-empty-sources`를 사용합니다.
+- 기본 `collect-sources-live`는 `web` 채널에서 실제 인터넷 검색(GitHub API)을 강제하며, 실패 시 즉시 중단합니다. 예외가 필요할 때만 `--web-fallback-mode find`를 사용합니다.
 
 ## Script Path
 
@@ -151,7 +152,7 @@ python3 "$SBP_SCRIPT" collect-sources-live \
 1. 프로젝트 분석(`project_profile.tsv`)
 2. `npx --yes skills find <query>` 실행 후 `find_output.txt` 생성
 3. `https://skills.sh/` 수집 후 `popular_output.html` 생성
-4. GitHub 검색 API 기반 인터넷 후보 `web_candidates.tsv` 생성 (API 실패/응답 0건 시 `skills find` 기반 웹 후보로 자동 fallback)
+4. GitHub 검색 API 기반 인터넷 후보 `web_candidates.tsv` 생성
 5. `candidates.find.tsv`, `candidates.popular.tsv`, `candidates.web.tsv`까지 정규화
 
 주요 옵션:
@@ -161,7 +162,8 @@ python3 "$SBP_SCRIPT" collect-sources-live \
 - `--find-command`: find 실행 명령 커스터마이즈 (기본 `npx --yes skills find`)
 - `--find-timeout-sec`: find 명령 타임아웃 초 (기본 `45`)
 - `--web-mode seed --web-seed-input <path>`: 인터넷 검색 대신 사전 정리 TSV 사용(오프라인/테스트용)
-- 기본 `web-mode=github`에서 GitHub API 호출이 실패하거나 후보가 0건이면 `skills find` 기반 웹 후보 수집으로 자동 fallback합니다.
+- 기본 `web-mode=github`에서 GitHub API 호출 실패/응답 0건은 즉시 실패합니다.
+- `--web-fallback-mode find`: 위 실패 상황에서만 `skills find` 기반 웹 후보로 fallback 허용(예외 운영 모드)
 - `--allow-empty-sources`: 비어 있는 채널 허용
 - `--run-after-collect`: 수집 직후 `run` 단계 자동 실행
 - `--min-project-keyword-hits`: 승인 최소 프로젝트 키워드 히트 수 (기본 `1`, 느슨하게 하려면 `0`)

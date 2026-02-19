@@ -1043,6 +1043,7 @@ def collect_sources_live(args: argparse.Namespace) -> int:
         ensure_parent(web_output)
         shutil.copyfile(seed_path, web_output)
     else:
+        github_failure_reason = ""
         try:
             collect_web_candidates_from_github(
                 web_queries=web_queries,
@@ -1053,21 +1054,24 @@ def collect_sources_live(args: argparse.Namespace) -> int:
                 timeout_sec=max(args.timeout_sec, 5),
             )
         except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
-            web_fallback_reason = f"github-api-unavailable ({type(exc).__name__})"
-            collect_web_candidates_via_find(
-                web_queries=web_queries,
-                out=web_output,
-                find_command=args.find_command,
-                timeout_sec=max(args.find_timeout_sec, 1),
-            )
+            github_failure_reason = f"github-api-unavailable ({type(exc).__name__})"
         else:
             if len(read_table(web_output)) == 0:
-                web_fallback_reason = "github-api-empty"
+                github_failure_reason = "github-api-empty"
+
+        if github_failure_reason:
+            if args.web_fallback_mode == "find":
+                web_fallback_reason = github_failure_reason
                 collect_web_candidates_via_find(
                     web_queries=web_queries,
                     out=web_output,
                     find_command=args.find_command,
                     timeout_sec=max(args.find_timeout_sec, 1),
+                )
+            else:
+                raise RuntimeError(
+                    f"internet web source collection failed: {github_failure_reason}. "
+                    "Set --web-fallback-mode find to allow find-based fallback."
                 )
 
     collect_web(web_output, candidates_web)
@@ -1462,6 +1466,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     live_cmd.add_argument("--popular-url", default="https://skills.sh/")
     live_cmd.add_argument("--github-api-base", default="https://api.github.com")
     live_cmd.add_argument("--web-mode", choices=["github", "seed"], default="github")
+    live_cmd.add_argument(
+        "--web-fallback-mode",
+        choices=["none", "find"],
+        default="none",
+        help="fallback mode when github web collection fails (default: none)",
+    )
     live_cmd.add_argument("--web-seed-input")
     live_cmd.add_argument("--web-repo-limit", type=int, default=18)
     live_cmd.add_argument("--web-skill-limit-per-repo", type=int, default=6)
