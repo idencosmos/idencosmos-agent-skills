@@ -10,190 +10,122 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$tmp_dir/src" "$tmp_dir/backend" "$tmp_dir/tests" "$tmp_dir/.github/workflows"
-cat > "$tmp_dir/package.json" <<'JSON'
-{
-  "name": "agent-factory-smoke",
-  "private": true,
-  "dependencies": {
-    "react": "^19.0.0",
-    "express": "^4.19.0"
-  }
-}
-JSON
+project_root="$tmp_dir/project"
+mkdir -p "$project_root"
 
-cat > "$tmp_dir/src/app.tsx" <<'TS'
-export const App = () => "ok";
-TS
+run_dir="$project_root/.agents/project-agent-factory/runs/manual"
+mkdir -p "$run_dir"
 
-cat > "$tmp_dir/backend/app.py" <<'PY'
-def healthcheck():
-    return "ok"
-PY
+cat > "$run_dir/agent_plan.tsv" <<'TSV'
+agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
+paf_explorer	Project Explorer	10	context	agents/paf_explorer.toml	Explore project structure.	Collect evidence-backed architecture notes.	gpt-5	medium	workspace-write
+paf_implementer	Project Implementer	20	delivery	agents/paf_implementer.toml	Implement requested changes.	Apply scoped edits and run available checks.	gpt-5-codex	high	danger-full-access
+TSV
 
-cat > "$tmp_dir/tests/app.test.ts" <<'TS'
-describe("app", () => {
-  it("works", () => {
-    expect(true).toBe(true);
-  });
-});
-TS
+bash "$SCRIPT_PATH" validate-plan --plan "$run_dir/agent_plan.tsv" >/dev/null
 
-cat > "$tmp_dir/Dockerfile" <<'DOCKER'
-FROM alpine:3.20
-DOCKER
+bash "$SCRIPT_PATH" apply-plan \
+  --project-root "$project_root" \
+  --plan "$run_dir/agent_plan.tsv" \
+  --out-dir "$run_dir" >/dev/null
 
-cat > "$tmp_dir/.github/workflows/ci.yml" <<'YAML'
-name: ci
-on: [push]
-jobs:
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo ok
-YAML
+[[ -f "$project_root/.codex/config.toml" ]]
+[[ -f "$project_root/.codex/agents/paf_explorer.toml" ]]
+[[ -f "$project_root/.codex/agents/paf_implementer.toml" ]]
+[[ -f "$run_dir/apply_report.tsv" ]]
+[[ -f "$run_dir/scope_validation.tsv" ]]
+[[ -f "$run_dir/audit.tsv" ]]
+[[ -f "$run_dir/project_profile.tsv" ]]
 
-bash "$SCRIPT_PATH" run --project-root "$tmp_dir" --max-agents 6 >/dev/null
-
-[[ -f "$tmp_dir/.codex/config.toml" ]]
-[[ -f "$tmp_dir/.codex/agents/paf_explorer.toml" ]]
-[[ -f "$tmp_dir/.codex/agents/paf_implementer.toml" ]]
-[[ -f "$tmp_dir/.codex/agents/paf_backend.toml" ]]
-[[ -f "$tmp_dir/.codex/agents/paf_frontend.toml" ]]
-[[ -f "$tmp_dir/.codex/agents/paf_qa.toml" ]]
-[[ -f "$tmp_dir/.codex/agents/paf_ops.toml" ]]
-
-rg -q "^# BEGIN project-agent-factory managed agents$" "$tmp_dir/.codex/config.toml"
-rg -q "^\[agents.paf_explorer\]$" "$tmp_dir/.codex/config.toml"
-
-run_root="$tmp_dir/.agents/project-agent-factory/runs"
-latest_run="$(find "$run_root" -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1)"
-[[ -f "$latest_run/project_profile.tsv" ]]
-[[ -f "$latest_run/agent_plan.tsv" ]]
-[[ -f "$latest_run/apply_report.tsv" ]]
-[[ -f "$latest_run/scope_validation.tsv" ]]
-[[ -f "$latest_run/audit.tsv" ]]
-rg -q '^file_count_tsx\t1$' "$latest_run/project_profile.tsv"
-rg -q '^file_count_code_total\t3$' "$latest_run/project_profile.tsv"
+rg -q "^# BEGIN project-agent-factory managed agents$" "$project_root/.codex/config.toml"
+rg -q "^\[agents.paf_explorer\]$" "$project_root/.codex/config.toml"
+rg -q "^\[agents.paf_implementer\]$" "$project_root/.codex/config.toml"
+rg -q 'model = "gpt-5-codex"' "$project_root/.codex/agents/paf_implementer.toml"
+rg -q 'model_reasoning_effort = "high"' "$project_root/.codex/agents/paf_implementer.toml"
+rg -q 'sandbox_mode = "danger-full-access"' "$project_root/.codex/agents/paf_implementer.toml"
+rg -q 'Do not write outside the project root\.' "$project_root/.codex/agents/paf_implementer.toml"
+rg -q '^frontend_signal	unknown$' "$run_dir/project_profile.tsv"
 
 # stale managed configs should be removed when plan shrinks
-cat > "$tmp_dir/reduced_plan.tsv" <<'TSV'
-agent_id	role_name	priority	reason	config_relpath
-paf_explorer	Project Explorer	10	keep	agents/paf_explorer.toml
-paf_implementer	Project Implementer	20	keep	agents/paf_implementer.toml
+cat > "$run_dir/reduced_plan.tsv" <<'TSV'
+agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
+paf_explorer	Project Explorer	10	keep	agents/paf_explorer.toml	Explore project structure.	Collect evidence-backed architecture notes.	gpt-5	medium	workspace-write
 TSV
 
 bash "$SCRIPT_PATH" render-config \
-  --project-root "$tmp_dir" \
-  --plan "$tmp_dir/reduced_plan.tsv" \
-  --report "$tmp_dir/reduced_report.tsv" >/dev/null
+  --project-root "$project_root" \
+  --plan "$run_dir/reduced_plan.tsv" \
+  --report "$run_dir/reduced_report.tsv" >/dev/null
 
-[[ -f "$tmp_dir/.codex/agents/paf_explorer.toml" ]]
-[[ -f "$tmp_dir/.codex/agents/paf_implementer.toml" ]]
-[[ ! -f "$tmp_dir/.codex/agents/paf_backend.toml" ]]
-[[ ! -f "$tmp_dir/.codex/agents/paf_frontend.toml" ]]
-[[ ! -f "$tmp_dir/.codex/agents/paf_qa.toml" ]]
-[[ ! -f "$tmp_dir/.codex/agents/paf_ops.toml" ]]
-
-rg -q 'remove_stale_agent_config.*paf_backend.toml.*removed' "$tmp_dir/reduced_report.tsv"
-rg -q 'remove_stale_agent_config.*paf_frontend.toml.*removed' "$tmp_dir/reduced_report.tsv"
-rg -q 'remove_stale_agent_config.*paf_qa.toml.*removed' "$tmp_dir/reduced_report.tsv"
-rg -q 'remove_stale_agent_config.*paf_ops.toml.*removed' "$tmp_dir/reduced_report.tsv"
-
-rg -q "^\[agents.paf_explorer\]$" "$tmp_dir/.codex/config.toml"
-rg -q "^\[agents.paf_implementer\]$" "$tmp_dir/.codex/config.toml"
-if rg -q "^\[agents.paf_backend\]$" "$tmp_dir/.codex/config.toml"; then
-  echo "error: stale backend block should have been removed" >&2
+[[ -f "$project_root/.codex/agents/paf_explorer.toml" ]]
+[[ ! -f "$project_root/.codex/agents/paf_implementer.toml" ]]
+rg -q 'remove_stale_agent_config.*paf_implementer.toml.*removed' "$run_dir/reduced_report.tsv"
+if rg -q "^\[agents.paf_implementer\]$" "$project_root/.codex/config.toml"; then
+  echo "error: stale implementer block should have been removed" >&2
   exit 1
 fi
 
-# plan-agents also enforces max-agents >= 2
-if bash "$SCRIPT_PATH" plan-agents \
-  --profile "$latest_run/project_profile.tsv" \
-  --out "$tmp_dir/plan_invalid.tsv" \
-  --max-agents 1 >/dev/null 2>&1; then
-  echo "error: plan-agents should reject --max-agents 1" >&2
+# validate-plan should reject malformed headers
+cat > "$run_dir/bad_header.tsv" <<'TSV'
+agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	sandbox_mode
+paf_explorer	Project Explorer	10	bad	agents/paf_explorer.toml	Explore project structure.	Collect evidence.	gpt-5	workspace-write
+TSV
+
+if bash "$SCRIPT_PATH" validate-plan --plan "$run_dir/bad_header.tsv" >/dev/null 2>&1; then
+  echo "error: validate-plan should reject malformed header" >&2
   exit 1
 fi
 
-# nested git repositories should be excluded from signal detection
-nested_root="$tmp_dir/nested-scan"
-mkdir -p "$nested_root/src" "$nested_root/vendor-subrepo/.git" "$nested_root/vendor-subrepo/tests" "$nested_root/vendor-subrepo/.github/workflows"
+# validate-plan should reject empty required fields
+cat > "$run_dir/bad_empty_field.tsv" <<'TSV'
+agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
+paf_explorer	Project Explorer	10	bad	agents/paf_explorer.toml	Explore project structure.		gpt-5	medium	workspace-write
+TSV
 
-cat > "$nested_root/src/main.py" <<'PY'
-def run():
-    return "ok"
-PY
+if bash "$SCRIPT_PATH" validate-plan --plan "$run_dir/bad_empty_field.tsv" >/dev/null 2>&1; then
+  echo "error: validate-plan should reject empty required fields" >&2
+  exit 1
+fi
 
-cat > "$nested_root/vendor-subrepo/tests/vendor.test.ts" <<'TS'
-describe("vendor", () => {
-  it("noise", () => {
-    expect(true).toBe(true);
-  });
-});
-TS
+# validate-plan should reject duplicate ids/config paths
+cat > "$run_dir/bad_duplicate.tsv" <<'TSV'
+agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
+dup	A	10	one	agents/dup.toml	Desc A	Instr A	gpt-5	medium	workspace-write
+dup	B	20	two	agents/dup2.toml	Desc B	Instr B	gpt-5	medium	workspace-write
+TSV
 
-cat > "$nested_root/vendor-subrepo/.github/workflows/vendor.yml" <<'YAML'
-name: vendor
-on: [push]
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo vendor
-YAML
+if bash "$SCRIPT_PATH" validate-plan --plan "$run_dir/bad_duplicate.tsv" >/dev/null 2>&1; then
+  echo "error: validate-plan should reject duplicate agent ids" >&2
+  exit 1
+fi
 
-bash "$SCRIPT_PATH" scan-project --project-root "$nested_root" --out "$nested_root/profile.tsv" >/dev/null
-rg -q '^ops_signal\tno$' "$nested_root/profile.tsv"
-rg -q '^test_signal\tno$' "$nested_root/profile.tsv"
+cat > "$run_dir/bad_duplicate_config.tsv" <<'TSV'
+agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
+a1	A	10	one	agents/same.toml	Desc A	Instr A	gpt-5	medium	workspace-write
+a2	B	20	two	agents/same.toml	Desc B	Instr B	gpt-5	medium	workspace-write
+TSV
+
+if bash "$SCRIPT_PATH" validate-plan --plan "$run_dir/bad_duplicate_config.tsv" >/dev/null 2>&1; then
+  echo "error: validate-plan should reject duplicate config paths" >&2
+  exit 1
+fi
 
 # render-config must reject path traversal in config_relpath
-guard_root="$tmp_dir/path-guard"
-mkdir -p "$guard_root"
 outside_target="$tmp_dir/escape.toml"
 rm -f "$outside_target"
-
-cat > "$guard_root/malicious_plan.tsv" <<'TSV'
-agent_id	role_name	priority	reason	config_relpath
-evil	Evil	10	attempt	../../escape.toml
+cat > "$run_dir/malicious_plan.tsv" <<'TSV'
+agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
+evil	Evil	10	attempt	../../escape.toml	Malicious	Do bad things	gpt-5	medium	workspace-write
 TSV
 
 if bash "$SCRIPT_PATH" render-config \
-  --project-root "$guard_root" \
-  --plan "$guard_root/malicious_plan.tsv" \
-  --report "$guard_root/report.tsv" >/dev/null 2>&1; then
+  --project-root "$project_root" \
+  --plan "$run_dir/malicious_plan.tsv" \
+  --report "$run_dir/malicious_report.tsv" >/dev/null 2>&1; then
   echo "error: render-config should reject traversal config_relpath" >&2
   exit 1
 fi
-
 [[ ! -f "$outside_target" ]]
-
-# apply-plan should accept AI-generated plan fields
-ai_root="$tmp_dir/ai-apply"
-mkdir -p "$ai_root"
-
-cat > "$ai_root/ai_plan.tsv" <<'TSV'
-agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
-paf_explorer	Project Explorer	10	ai-plan	agents/paf_explorer.toml	AI "generated" explorer	Use AI-generated explorer policy.	gpt-5	high	workspace-write
-paf_implementer	Project Implementer	20	ai-plan	agents/paf_implementer.toml	AI generated implementer	Use AI-generated implementer policy.	gpt-5-codex	medium	danger-full-access
-TSV
-
-bash "$SCRIPT_PATH" apply-plan \
-  --project-root "$ai_root" \
-  --plan "$ai_root/ai_plan.tsv" \
-  --out-dir "$ai_root/.agents/project-agent-factory/runs/manual" >/dev/null
-
-[[ -f "$ai_root/.codex/config.toml" ]]
-[[ -f "$ai_root/.codex/agents/paf_explorer.toml" ]]
-[[ -f "$ai_root/.codex/agents/paf_implementer.toml" ]]
-[[ -f "$ai_root/.agents/project-agent-factory/runs/manual/apply_report.tsv" ]]
-[[ -f "$ai_root/.agents/project-agent-factory/runs/manual/scope_validation.tsv" ]]
-[[ -f "$ai_root/.agents/project-agent-factory/runs/manual/audit.tsv" ]]
-
-rg -q 'description = "AI \\"generated\\" explorer"' "$ai_root/.codex/config.toml"
-rg -q 'model = "gpt-5-codex"' "$ai_root/.codex/agents/paf_implementer.toml"
-rg -q 'sandbox_mode = "danger-full-access"' "$ai_root/.codex/agents/paf_implementer.toml"
-rg -q 'Use AI-generated implementer policy\.' "$ai_root/.codex/agents/paf_implementer.toml"
 
 # render-config should fail safely when managed block markers are corrupted
 corrupt_root="$tmp_dir/corrupt-marker"
@@ -207,8 +139,8 @@ keep_after = true
 TOML
 
 cat > "$corrupt_root/plan.tsv" <<'TSV'
-agent_id	role_name	priority	reason	config_relpath
-paf_explorer	Project Explorer	10	keep	agents/paf_explorer.toml
+agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
+paf_explorer	Project Explorer	10	keep	agents/paf_explorer.toml	Explore project structure.	Collect evidence-backed architecture notes.	gpt-5	medium	workspace-write
 TSV
 
 if bash "$SCRIPT_PATH" render-config \

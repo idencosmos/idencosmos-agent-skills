@@ -1,113 +1,117 @@
 ---
 name: project-agent-factory
-description: 프로젝트를 자동 탐색해 Codex 멀티 에이전트 구성을 제안하고, 현재 프로젝트 내부 .codex/config.toml 및 .codex/agents/*.toml을 안전하게 생성/갱신합니다. 프로젝트 맞춤 에이전트를 빠르게 초기 구성하거나 재생성해야 할 때 사용합니다.
+description: AI가 생성한 agent_plan.tsv를 검증하고, 프로젝트 내부 .codex/config.toml 및 .codex/agents/*.toml에 안전하게 적용/검증/감사합니다. 멀티 에이전트 계획을 이미 갖고 있거나 LLM이 역할/지침/모델을 설계한 뒤 파일 반영 단계가 필요할 때 사용합니다.
 ---
 
 # Project Agent Factory
 
-프로젝트별 에이전트를 "추측"이 아니라 실제 파일 신호를 기반으로 구성합니다.
-현재 권장 방식은 **AI가 계획(roles/instructions/model)을 만들고**, 스크립트는 **적용/검증/감사**만 수행하는 것입니다.
+`project-agent-factory`는 **AI가 만든 계획을 안전하게 적용하는 엔진**입니다.
+역할 선정, 설명문 작성, 지시문 생성은 스크립트가 아니라 AI가 담당합니다.
 
 핵심 가드레일:
 - 생성/갱신 경로를 `<project-root>/.codex/` 하위로 강제
-- 실행 로그/산출물을 `<project-root>/.agents/project-agent-factory/runs/<timestamp>/`에 기록
+- 실행 산출물을 `<project-root>/.agents/project-agent-factory/runs/<timestamp>/`에 기록
 - 기존 `.codex/config.toml` 전체를 덮어쓰지 않고 관리 블록만 갱신
+- `agent_plan.tsv` 스키마를 엄격 검증(필수 컬럼/빈 값/중복/허용값)
 
 ## Quick Start
 
 ```bash
 PAF_SCRIPT="$HOME/.agents/skills/project-agent-factory/scripts/agent_factory.sh"
-bash "$PAF_SCRIPT" run \
-  --project-root "$(pwd)"
+RUN_DIR=".agents/project-agent-factory/runs/$(date -u +%Y%m%d_%H%M%S)"
+
+mkdir -p "$RUN_DIR"
+
+# 1) AI가 작성한 계획 저장
+cat > "$RUN_DIR/agent_plan.tsv" <<'TSV'
+agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
+paf_explorer	Project Explorer	10	context mapping	agents/paf_explorer.toml	Explore repo structure and constraints.	Map architecture with evidence-first notes.	gpt-5	medium	workspace-write
+paf_implementer	Project Implementer	20	delivery	agents/paf_implementer.toml	Implement scoped changes with verification.	Apply requested edits and run available checks.	gpt-5	medium	workspace-write
+TSV
+
+# 2) 계획 검증(선택 권장)
+bash "$PAF_SCRIPT" validate-plan --plan "$RUN_DIR/agent_plan.tsv"
+
+# 3) 계획 적용 + 스코프 검증 + 감사
+bash "$PAF_SCRIPT" apply-plan \
+  --project-root "$(pwd)" \
+  --plan "$RUN_DIR/agent_plan.tsv" \
+  --out-dir "$RUN_DIR"
 ```
-
-소스 저장소에서 직접 테스트할 때는 아래 경로를 사용합니다.
-
-```bash
-bash idencosmos-agent-skills/skills/project-agent-factory/scripts/agent_factory.sh run \
-  --project-root "$(pwd)"
-```
-
-권장 파이프라인:
-1. AI가 프로젝트를 탐색해 `agent_plan.tsv` 작성
-2. `apply-plan`: 계획 적용 (`render-config` + `validate-scope` + `audit`)
-
-레거시 파이프라인(호환용):
-1. `scan-project`: 언어/프레임워크/테스트/운영 신호 수집
-2. `plan-agents`: 기본 규칙 기반 계획 생성
-3. `render-config`
-4. `validate-scope`
-5. `audit`
 
 ## Commands
 
-### AI-First Run (Recommended)
+### apply-plan
 
 ```bash
-PAF_SCRIPT="$HOME/.agents/skills/project-agent-factory/scripts/agent_factory.sh"
 bash "$PAF_SCRIPT" apply-plan \
   --project-root "$(pwd)" \
-  --plan .agents/project-agent-factory/runs/<ts>/agent_plan.tsv \
-  --out-dir .agents/project-agent-factory/runs/<ts>
+  --plan <agent_plan.tsv> \
+  --out-dir <run-dir>
 ```
 
-`agent_plan.tsv` 권장 헤더:
+내부적으로 `render-config` + `validate-scope` + `audit`를 순서대로 실행합니다.
+
+### render-config
+
+```bash
+bash "$PAF_SCRIPT" render-config \
+  --project-root "$(pwd)" \
+  --plan <agent_plan.tsv> \
+  --report <apply_report.tsv>
+```
+
+### validate-plan
+
+```bash
+bash "$PAF_SCRIPT" validate-plan --plan <agent_plan.tsv>
+```
+
+### validate-scope
+
+```bash
+bash "$PAF_SCRIPT" validate-scope \
+  --project-root "$(pwd)" \
+  --report <apply_report.tsv> \
+  --out <scope_validation.tsv>
+```
+
+### audit
+
+```bash
+bash "$PAF_SCRIPT" audit \
+  --profile <project_profile.tsv> \
+  --plan <agent_plan.tsv> \
+  --report <apply_report.tsv> \
+  --out <audit.tsv>
+```
+
+## Plan Contract (Required Header)
 
 ```tsv
 agent_id	role_name	priority	reason	config_relpath	description	developer_instructions	model	model_reasoning_effort	sandbox_mode
 ```
 
-- 최소 필수 컬럼: `agent_id`, `role_name`, `priority`, `reason`, `config_relpath`
-- AI 품질 향상을 위해 권장 컬럼: `description`, `developer_instructions`, `model`, `model_reasoning_effort`, `sandbox_mode`
-
-### Legacy Stage Run
-
-```bash
-# 1) Scan
-bash "$PAF_SCRIPT" scan-project \
-  --project-root "$(pwd)" \
-  --out .agents/project-agent-factory/runs/<ts>/project_profile.tsv
-
-# 2) Plan
-bash "$PAF_SCRIPT" plan-agents \
-  --profile .agents/project-agent-factory/runs/<ts>/project_profile.tsv \
-  --out .agents/project-agent-factory/runs/<ts>/agent_plan.tsv \
-  --max-agents 6
-
-# 3) Render
-bash "$PAF_SCRIPT" render-config \
-  --project-root "$(pwd)" \
-  --plan .agents/project-agent-factory/runs/<ts>/agent_plan.tsv \
-  --report .agents/project-agent-factory/runs/<ts>/apply_report.tsv
-
-# 4) Scope validation
-bash "$PAF_SCRIPT" validate-scope \
-  --project-root "$(pwd)" \
-  --report .agents/project-agent-factory/runs/<ts>/apply_report.tsv \
-  --out .agents/project-agent-factory/runs/<ts>/scope_validation.tsv
-```
+필수 규칙:
+- 모든 컬럼 값은 비어 있으면 안 됩니다.
+- `agent_id`와 `config_relpath`는 중복되면 안 됩니다.
+- `config_relpath`는 `agents/*.toml`만 허용됩니다.
+- `model_reasoning_effort`: `low|medium|high`
+- `sandbox_mode`: `read-only|workspace-write|danger-full-access`
 
 ## Outputs
 
-- `project_profile.tsv`: (선택) 프로젝트 탐색 결과(언어/프레임워크/신호)
-- `agent_plan.tsv`: AI 또는 레거시 규칙으로 생성한 계획
-- `apply_report.tsv`: 실제 파일 생성/갱신 결과
+- `apply_report.tsv`: 실제 파일 생성/갱신/정리 결과
 - `scope_validation.tsv`: 프로젝트 경로 제한 검증 결과
 - `audit.tsv`: 실행 요약
+- `project_profile.tsv`: `apply-plan`에서 `--profile` 미지정 시 `unknown` 값 기반 스텁 생성
 
-## Role Selection Rules
+## Migration Note
 
-- 항상 포함: `paf_explorer`, `paf_implementer`
-- 조건부 포함:
-  - 백엔드 신호가 있으면 `paf_backend`
-  - 프론트엔드 신호가 있으면 `paf_frontend`
-  - 테스트 신호 또는 코드량이 많으면 `paf_qa`
-  - Docker/K8s/Terraform 신호가 있으면 `paf_ops`
-- `--max-agents` 상한을 넘으면 우선순위 높은 순서로 절단
-
-위 규칙은 레거시 `plan-agents` 커맨드의 기본 동작입니다. AI-first 모드에서는 프로젝트 맥락에 따라 더 세밀한 계획을 생성할 수 있습니다.
+레거시 `run`, `scan-project`, `plan-agents`는 제거되었습니다.
+이 스킬은 이제 AI 계획을 받아 안전 적용하는 단계만 담당합니다.
 
 ## References
 
 - 멀티 에이전트 설정 근거 및 필드 요약: `references/codex-multi-agent-notes.md`
-- 역할별 지침 패턴: `references/agent-role-patterns.md`
+- 역할 설계 참고 패턴: `references/agent-role-patterns.md`
