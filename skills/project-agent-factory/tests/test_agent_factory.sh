@@ -266,6 +266,39 @@ if bash "$SCRIPT_PATH" apply-plan \
   exit 1
 fi
 
+# apply-plan should require official/github/web source types all present
+cat > "$run_dir/bad_source_review_missing_type.tsv" <<'TSV'
+source_id	source_type	url	checked_at_utc	relevance_note	key_constraints
+official-1	official	https://developers.openai.com/codex/multi-agent	2026-02-19T00:00:00Z	multi-agent 설정 키 확인	experimental 기능 여부 확인
+github-1	github	https://github.com/openai/codex/pull/11917	2026-02-19T00:01:00Z	role alias/config_file 변경 근거	PR 기준으로 버전 차이 확인
+TSV
+
+if bash "$SCRIPT_PATH" apply-plan \
+  --project-root "$project_root" \
+  --plan "$run_dir/agent_plan.tsv" \
+  --source-review "$run_dir/bad_source_review_missing_type.tsv" \
+  --out-dir "$run_dir/bad_source_review_missing_type_run" >/dev/null 2>&1; then
+  echo "error: apply-plan should reject source_review without all source types" >&2
+  exit 1
+fi
+
+# apply-plan should reject source_id/source_type prefix mismatch
+cat > "$run_dir/bad_source_review_type_mismatch.tsv" <<'TSV'
+source_id	source_type	url	checked_at_utc	relevance_note	key_constraints
+official-1	official	https://developers.openai.com/codex/multi-agent	2026-02-19T00:00:00Z	multi-agent 설정 키 확인	experimental 기능 여부 확인
+official-2	github	https://github.com/openai/codex/pull/11917	2026-02-19T00:01:00Z	source_id/source_type 불일치 검증	접두어 불일치
+web-1	web	https://developers.openai.com/cookbook/examples/agents_sdk/parallel_agents	2026-02-19T00:02:00Z	역할 분해 패턴 참고	Codex 설정 키는 공식 문서로 재검증
+TSV
+
+if bash "$SCRIPT_PATH" apply-plan \
+  --project-root "$project_root" \
+  --plan "$run_dir/agent_plan.tsv" \
+  --source-review "$run_dir/bad_source_review_type_mismatch.tsv" \
+  --out-dir "$run_dir/bad_source_review_type_mismatch_run" >/dev/null 2>&1; then
+  echo "error: apply-plan should reject source_id/source_type mismatch rows" >&2
+  exit 1
+fi
+
 # apply-plan should handle CRLF plans without leaking carriage returns to TOML
 printf 'agent_id\trole_name\tpriority\treason\tconfig_relpath\tdescription\tdeveloper_instructions\tmodel\tmodel_reasoning_effort\tsandbox_mode\r\n' > "$run_dir/crlf_plan.tsv"
 printf 'paf_windows\tWindows Agent\t30\tcrlf source=web-1\tagents/paf_windows.toml\tHandle CRLF plan rows.\tKeep outputs normalized.\tgpt-5\tmedium\tworkspace-write\r\n' >> "$run_dir/crlf_plan.tsv"
