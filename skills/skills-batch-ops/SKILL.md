@@ -8,7 +8,7 @@ description: 외부 AI 오케스트레이터가 생성한 discovery/review queue
 이 스킬은 **AI 판단 자체를 스크립트로 대체하지 않습니다.**
 스크립트는 아래 2가지 게이트 업무만 수행합니다.
 
-1. `verify-parallel-proof`: 워커 병렬 실행 증거 strict 검증 (서로 다른 `worker_id` 간 시간 overlap 필수)
+1. `verify-parallel-proof`: 워커 병렬 실행 증거 strict 검증 (queue `task_id`가 2개 이상이면 서로 다른 `worker_id` 간 시간 overlap 필수)
 2. `install-approved`: `approved`만 스킬 단위 설치 (병렬 증거 `passed=true` + 설치 직전 구조 게이트 필수, 일부 실패 시 전체 실패)
 
 ## 책임 분리
@@ -31,6 +31,20 @@ description: 외부 AI 오케스트레이터가 생성한 discovery/review queue
   - `install-approved`: `npx`
 - 권장 명령: `jq` (`parallel_proof.summary.json` 파싱 안정성 향상)
 - 시간 컬럼(`worker_started_at`, `worker_finished_at`)은 ISO 8601 UTC(`...Z`) 형식을 권장합니다.
+
+## 스크립트 경로 고정
+
+실행 전에 스크립트 경로를 먼저 고정하세요.
+
+```bash
+SKILLS_BATCH_OPS_SCRIPT="$HOME/.agents/skills/skills-batch-ops/scripts/skills_batch_ops.sh"
+
+if [[ ! -x "$SKILLS_BATCH_OPS_SCRIPT" ]]; then
+  SKILLS_BATCH_OPS_SCRIPT="$(pwd)/skills/skills-batch-ops/scripts/skills_batch_ops.sh"
+fi
+```
+
+위 변수는 설치본(`~/.agents/...`)과 저장소 체크아웃(`skills/...`) 모두에서 동작하도록 준비하는 용도입니다.
 
 ## 표준 흐름
 
@@ -79,11 +93,15 @@ description: 외부 AI 오케스트레이터가 생성한 discovery/review queue
 - `insufficient_unique_workers`
 - `missing_worker_metadata`
 
+전역 strict 판정 메모:
+- `insufficient_unique_workers`, `serial_execution_detected`는 queue `task_id`가 2개 이상일 때만 평가됩니다.
+- queue `task_id`가 1개면 태스크 단위 검증(`missing_worker_metadata`, `invalid_time_range` 등)만 적용됩니다.
+
 ## 명령어
 
 ```bash
 # 1) 병렬 실행 증거 검증
-bash scripts/skills_batch_ops.sh verify-parallel-proof \
+bash "$SKILLS_BATCH_OPS_SCRIPT" verify-parallel-proof \
   --stage discovery \
   --queue <review_discovery.queue.tsv> \
   --out <discovery_parallel_proof.tsv> \
@@ -91,7 +109,7 @@ bash scripts/skills_batch_ops.sh verify-parallel-proof \
   <worker_1.tsv> <worker_2.tsv>
 
 # 2) 승인 항목 설치 (parallel_proof.summary.json passed=true 필요)
-bash scripts/skills_batch_ops.sh install-approved \
+bash "$SKILLS_BATCH_OPS_SCRIPT" install-approved \
   --manifest <review_manifest.ai.tsv> \
   --proof <parallel_proof.summary.json> \
   --report <install.report.tsv> \
