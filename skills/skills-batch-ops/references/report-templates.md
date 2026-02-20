@@ -29,10 +29,13 @@
 
 ```markdown
 # Candidates (<find|popular|web>)
+- channel_status: <done|blocked>
+- checked_at_utc: <YYYY-MM-DDTHH:MM:SSZ>
+- block_reason: <optional, if blocked>
 
-| skill_ref | installs_or_popularity | evidence_url | fit_note |
-|---|---:|---|---|
-| owner/repo@skill-name | 12345 | https://... | <why fit> |
+| skill_ref | signal | evidence_url | fit_note |
+|---|---|---|---|
+| owner/repo@skill-name | installs=12345 | https://... | <why fit> |
 ```
 
 ## 3) `candidates.merged.md`
@@ -40,9 +43,9 @@
 ```markdown
 # Candidates Merged
 
-| skill_ref | methods | method_count | evidence_urls | fit_note |
-|---|---|---:|---|---|
-| owner/repo@skill-name | find,popular,web | 3 | <url1>, <url2> | <summary> |
+| skill_ref | methods | method_count | evidence_urls | cluster_key | fit_note |
+|---|---|---:|---|---|---|
+| owner/repo@skill-name | find,popular,web | 3 | <url1>, <url2> | reliability-observability | <summary> |
 ```
 
 ## 4) `review.content.md`
@@ -50,9 +53,9 @@
 ```markdown
 # Content Review
 
-| skill_ref | skill_md_url | content_status | fit_level | reason |
-|---|---|---|---|---|
-| owner/repo@skill-name | https://raw.../SKILL.md | passed | high | <detailed reason> |
+| skill_ref | skill_md_url | content_status | fit_level | cluster_key | selection | reason |
+|---|---|---|---|---|---|---|
+| owner/repo@skill-name | https://raw.../SKILL.md | passed | high | reliability-observability | selected | <detailed reason> |
 ```
 
 ## 5) `review.manifest.md`
@@ -60,11 +63,11 @@
 ```markdown
 # Review Manifest
 
-| skill_ref | method_count | content_status | final_status | rationale |
-|---|---:|---|---|---|
-| owner/repo@skill-name | 3 | passed | approved | <install rationale> |
-| owner/repo@other | 1 | passed | pending | <needs more evidence> |
-| owner/repo@bad | 2 | failed | rejected | <content failure reason> |
+| skill_ref | method_count | cluster_key | selection | content_status | final_status | rationale |
+|---|---:|---|---|---|---|---|
+| owner/repo@skill-name | 3 | reliability-observability | selected | passed | approved | <install rationale> |
+| owner/repo@other | 2 | reliability-observability | alternate | passed | pending | <selected 후보 대비 중복> |
+| owner/repo@bad | 1 | payment | hold | failed | rejected | <content failure reason> |
 ```
 
 ## 6) `install.plan.md`
@@ -74,6 +77,9 @@
 
 ## Approved Skills
 - owner/repo@skill-name
+
+## Alternates (Not installed now)
+- owner/repo@other
 
 ## Commands
 ```bash
@@ -93,4 +99,5 @@ npx --yes skills add owner/repo --skill skill-name -y
 | skill_ref | command | status | notes |
 |---|---|---|---|
 | owner/repo@skill-name | npx --yes skills add owner/repo --skill skill-name -y | installed | ok |
+| owner/repo@other | <none> | skipped_alternate | selected 후보와 기능 중복 |
 ```

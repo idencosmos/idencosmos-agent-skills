@@ -18,30 +18,7 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Ensure SKILL.md exists for each skill directory
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ ! -d skills ]; then
-            echo "skills directory not found"
-            exit 1
-          fi
-
-          found=0
-          for d in skills/*; do
-            [ -d "$d" ] || continue
-            found=1
-            if [ ! -f "$d/SKILL.md" ]; then
-              echo "missing SKILL.md in $d"
-              exit 1
-            fi
-          done
-
-          if [ "$found" -eq 0 ]; then
-            echo "No skill directories yet. Skipping strict checks."
-          fi
-
-      - name: Validate skill frontmatter and naming rules
+      - name: Validate skill frontmatter + naming + markdown-only structure
         shell: bash
         run: |
           set -euo pipefail

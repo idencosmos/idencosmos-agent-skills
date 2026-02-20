@@ -26,7 +26,8 @@
   - `https://github.com/openai/codex/pull/8376` (`developer_instructions` 설정 문서화 변경 근거)
   - `https://github.com/openai/codex/releases/tag/rust-v0.79.0` (멀티 에이전트 관련 릴리스 노트)
 - GitHub 외 웹 사례:
-  - `https://platform.claude.com/docs/en/build-with-claude/agentic-workflows` (역할 분해/오케스트레이션 패턴 참고)
+  - `https://platform.claude.com/docs/en/agents-and-tools/overview` (역할 분해/오케스트레이션 패턴 참고)
+  - `https://platform.claude.com/docs/en/agent-sdk/subagents` (서브에이전트 협업 패턴 참고)
   - `https://microsoft.github.io/autogen/stable/user-guide/core-user-guide/design-patterns/mixture-of-agents.html` (역할 분해/협업 패턴 참고)
 
 위 링크만 복사하지 말고, 현재 프로젝트 요구와 직접 연결되는 근거를 반드시 작성하세요.
@@ -55,6 +56,7 @@ source_id	source_type	url	checked_at_utc	relevance_note	key_constraints
 
 - 소스는 최신 상태를 확인하고 날짜를 남기세요.
 - 마케팅 소개 글보다 실제 설정/실행 예시가 있는 자료를 우선하세요.
+- 링크가 HTTP 200이어도 본문에 `Not Found` 또는 `Page not found`가 포함되면 invalid로 간주하고 다른 URL로 교체하세요.
 - `relevance_note`가 빈약하면 해당 소스는 계획 근거로 사용하지 마세요.
 - `reason`에서 사용할 수 있게 `source_id`를 명시적으로 추적하세요(예: `source=official-1 github-1`).
 - 네트워크가 막혀 수집하지 못하면 `relevance_note`에 `blocked`를 기록하고 부분 검증으로 보고하세요.

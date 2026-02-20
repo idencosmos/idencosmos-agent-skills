@@ -13,6 +13,7 @@ description: 프로젝트에 필요한 Codex 멀티 에이전트를 설계/생�
 - 모든 판단 근거는 실행 산출물(`project_profile.md`, `source_review.tsv`, `agent_plan.tsv`, `apply_report.md`)에 남깁니다.
 
 고정 파이프라인:
+0. trusted preflight (`trust_preflight.md`)
 1. 프로젝트 분석 (`project_profile.md`)
 2. 공식/사례 검증 (`source_review.tsv`)
 3. 멀티 에이전트 계획 생성 (`agent_plan.tsv`)
@@ -31,6 +32,32 @@ echo "project_root=$PROJECT_ROOT"
 ```
 
 이후 단계의 모든 상대경로는 `PROJECT_ROOT` 기준으로 해석합니다.
+
+## Step 0.5) Trusted 프로젝트 preflight (`trust_preflight.md`)
+
+Codex는 trusted 프로젝트에서만 프로젝트 로컬 `.codex/config.toml`를 반영합니다.
+이 스킬은 `.codex/` 반영이 핵심이므로 trust 상태를 **fail-closed**로 다룹니다.
+
+```bash
+NOW_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+cat > "$RUN_DIR/trust_preflight.md" <<EOF
+# Trust Preflight
+generated_at_utc: $NOW_UTC
+project_root: $PROJECT_ROOT
+
+- requirement: project must be trusted before applying .codex changes
+- trust_status: trusted|untrusted|unknown
+- evidence:
+  - (예) Codex UI/CLI에서 trusted 상태 확인
+  - (예) 세션 재시작 후 프로젝트 .codex 설정이 유효하게 반영됨을 확인
+- action_if_not_trusted: stop_after_step_3
+EOF
+```
+
+실행 규칙:
+- `trust_status=trusted`가 확인되기 전에는 Step 4~5를 수행하지 않습니다.
+- `untrusted|unknown`이면 Step 1~3(분석/계획)까지만 수행하고,
+  `apply_report.md`에 `blocked: project_untrusted_or_unverified`를 기록한 뒤 종료합니다.
 
 ## Step 1) 프로젝트 분석 (`project_profile.md`)
 
@@ -62,20 +89,10 @@ echo "project_root=$PROJECT_ROOT"
 
 그 다음 실제 원문 링크를 열람하고 `source_review.tsv`를 작성합니다.
 
-헤더:
-
-```tsv
-source_id	source_type	url	checked_at_utc	relevance_note	key_constraints
-```
-
-필수 규칙:
-- `source_type=official|github|web` 3종류를 모두 포함합니다.
-- `source_type=official`은 OpenAI 공식 도메인(`developers.openai.com`, `openai.com`)만 사용합니다.
-- `source_type=github`는 GitHub URL만 사용합니다.
-- `source_type=web`는 GitHub/OpenAI 공식 도메인을 제외한 공개 웹 URL만 사용합니다.
-- `checked_at_utc`는 실제 확인 시각(`YYYY-MM-DDTHH:MM:SSZ`)을 기록합니다.
-- 템플릿 복사만 하지 말고 프로젝트 맥락 `relevance_note`를 직접 작성합니다.
-- 네트워크가 막히면 `relevance_note`에 `blocked`를 명시하고 부분 검증으로 보고합니다.
+`source_review.tsv`의 헤더/컬럼 규칙/품질 기준은
+`references/multi-agent-case-sources.md`의
+`source_review.tsv 계약` + `품질 기준`을 **단일 기준(SSOT)**으로 사용합니다.
+이 `SKILL.md`에는 동일 계약을 중복 정의하지 않습니다.
 
 샘플:
 
@@ -85,7 +102,7 @@ cat > "$RUN_DIR/source_review.tsv" <<TSV
 source_id	source_type	url	checked_at_utc	relevance_note	key_constraints
 official-1	official	https://developers.openai.com/codex/multi-agent	$NOW_UTC	multi_agent 기능 플래그 및 에이전트 등록 키 검증	experimental 기능/버전 차이 확인 필요
 github-1	github	https://github.com/openai/codex/pull/11917	$NOW_UTC	config_file 분리형 role 구성 사례 검증	PR 기준이므로 현재 CLI 버전과 교차 확인 필요
-web-1	web	https://platform.claude.com/docs/en/build-with-claude/agentic-workflows	$NOW_UTC	역할 분해/오케스트레이션 패턴 참고	Codex 설정 키의 1차 근거로 사용하지 않음
+web-1	web	https://platform.claude.com/docs/en/agents-and-tools/overview	$NOW_UTC	역할 분해/오케스트레이션 패턴 참고	Codex 설정 키의 1차 근거로 사용하지 않음
 TSV
 ```
 
@@ -120,6 +137,10 @@ paf_implementer	Project Implementer	20	delivery-path(api+ui), source=github-1 of
 ## Step 4) 계획 반영 (직접 파일 편집)
 
 자동 스크립트 없이 아래를 직접 반영합니다.
+
+사전 조건:
+- `trust_preflight.md`의 `trust_status=trusted`가 확인된 경우에만 실행합니다.
+- `untrusted|unknown`이면 Step 4~5를 건너뛰고 `apply_report.md`에 blocked 상태를 남깁니다.
 
 1. `.codex/<config_relpath>` 생성/갱신
 - 파일 상단에 `# managed_by=project-agent-factory` 마커를 남깁니다.
@@ -170,6 +191,7 @@ config_file = "<config_relpath>"
 ## Step 5) 결과 검증 (`scope_validation.md` + `apply_report.md`)
 
 검증 체크:
+- `trust_preflight.md`의 trust 상태와 실제 수행 범위가 일치하는지 확인
 - 모든 생성/갱신 파일 경로가 `<project-root>/.codex/` 하위인지 확인
 - `.codex/config.toml`에 `multi_agent = true` 존재 확인
 - managed block의 agent 목록과 `agent_plan.tsv`가 일치하는지 확인
@@ -178,6 +200,7 @@ config_file = "<config_relpath>"
 권장 확인 명령:
 
 ```bash
+rg -n '^-\s+trust_status:\s+' "$RUN_DIR/trust_preflight.md"
 rg -n '^\[features\]|^multi_agent\s*=' .codex/config.toml
 rg -n '^\[agents\.".*"\]$|^config_file\s*=\s*"agents/[A-Za-z0-9._-]+\.toml"$' .codex/config.toml
 rg -n '^# managed_by=project-agent-factory$|^model\s*=|^model_reasoning_effort\s*=|^sandbox_mode\s*=|^developer_instructions\s*=' .codex/agents/*.toml
@@ -204,6 +227,11 @@ project_root: <path>
 # Multi-Agent Factory Audit
 generated_at_utc: <YYYY-MM-DDTHH:MM:SSZ>
 run_dir: <path>
+
+## 0) Trust Preflight
+- trust_status: trusted|untrusted|unknown
+- apply_mode: full_apply|plan_only
+- blocked_reason: <if blocked, explain>
 
 ## 1) Project Analysis Summary
 - stack/runtime/test 신호 요약

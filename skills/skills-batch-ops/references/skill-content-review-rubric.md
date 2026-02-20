@@ -1,6 +1,6 @@
 # Skill Content Review Rubric
 
-후보 스킬을 이름이 아니라 실제 `SKILL.md` 본문으로 검토하기 위한 기준입니다.
+후보 스킬을 이름이 아니라 실제 `SKILL.md` 본문으로 검토하고, 유사군 대표를 선정하기 위한 기준입니다.
 
 ## A. 위치 확인
 
@@ -40,9 +40,14 @@
 
 권장 규칙:
 
-- `approved`: `content_status=passed` and `method_count >= 2` and 적합성 `high`
-- `pending`: `content_status=passed` but 근거/적합성 보완 필요
+- `approved`: `content_status=passed` and 적합성 `high|medium` and 유사군 대표 선정 통과
+- `pending`: `content_status=passed` but 근거/적합성/실행 가능성 보완 필요
 - `rejected`: `content_status=failed` or 적합성 `low`
+
+보조 해석:
+
+- `method_count`는 가산점이지 필수 통과 조건이 아닙니다.
+- 동일 유사군에서 `approved`를 여러 개 주려면 상호 보완 관계를 명시해야 합니다.
 
 ## E. 기록 원칙
 
@@ -51,4 +56,5 @@
 - 확인한 `SKILL.md` URL
 - 통과/실패 사유(한 줄이 아닌 구체 문장)
 - 프로젝트와의 관련 키워드
+- 유사군 식별자(`cluster_key`)와 선정 상태(`selected|alternate|hold`)
 - 최종 판정(`approved|pending|rejected`)
