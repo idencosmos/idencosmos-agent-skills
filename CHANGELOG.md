@@ -4,6 +4,7 @@ All notable changes to this repository will be documented in this file.
 
 ## [Unreleased]
 
+- Strengthen `skills-batch-ops` runtime resilience with CLI preflight, `blocked_cli_hang` handling, degraded-mode scoring guidance, inventory coverage states, and deferred apply retry conditions.
 - Add first public skill: `skills-batch-ops`.
 - Initial repository scaffold.
 - Harden `skills-batch-ops` proof logic with `expected_stage` mismatch detection.

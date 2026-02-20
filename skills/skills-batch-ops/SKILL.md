@@ -5,8 +5,9 @@ description: 프로젝트에 필요한 스킬을 3채널(find-skills/인기/웹)
 
 # Skills Batch Ops
 
-`skills-batch-ops`는 아래 8단계를 고정으로 수행하는 문서 지시형 스킬입니다.
+`skills-batch-ops`는 아래 운영 단계를 고정으로 수행하는 문서 지시형 스킬입니다.
 
+0. 실행 가능성 프리플라이트
 1. 프로젝트 분석
 2. `find-skills` 기반 후보 탐색
 3. 인기/사용량 기반 후보 탐색
@@ -27,6 +28,10 @@ description: 프로젝트에 필요한 스킬을 3채널(find-skills/인기/웹)
 - 유사 기능군에서는 대표 스킬을 선정하고 나머지는 대체안으로 남기세요.
 - 최종 결정은 반드시 `keep | install | remove | hold` 중 하나로 명시하세요.
 - 설치/삭제 전에는 반드시 dry-run 계획을 먼저 제시하세요.
+- `skills` CLI 명령은 무쿼리 interactive 모드를 피하고, 가능한 한 non-interactive 형태(`find "<query>"`, `list`, `list -g`)로 실행하세요.
+- 명령이 장시간 무출력 상태로 유지되면 hang으로 간주해 중단하고 `blocked_cli_hang`으로 기록하세요(권장 기준: 45초, 최소 1회 재시도).
+- 채널 차단 시에는 누락 채널을 억지로 대체하지 말고 `blocked`로 닫은 뒤, Step 6에서 `method_count` 해석을 보정하세요.
+- 인벤토리는 `skills list`/`skills list -g`를 우선하고, CLI 차단 시 fallback 스캔 결과를 `complete|partial|blocked` 완전성과 함께 기록하세요.
 - 정보가 부족해도 질문을 남발하지 말고, 합리적 기본 가정을 적용한 뒤 `가정/영향`을 기록하세요.
 - 본 스킬의 결과물 구조는 `SKILL.md`와 `references/*.md`만 허용합니다.
 
@@ -47,6 +52,23 @@ description: 프로젝트에 필요한 스킬을 3채널(find-skills/인기/웹)
 
 템플릿은 `references/report-templates.md`를 사용하세요.
 
+프리플라이트 결과는 `project_profile.md` 상단(`preflight_status`, `blocked_reason`, `elapsed_sec`)에 함께 기록하세요.
+
+## Step 0) 실행 가능성 프리플라이트
+
+Step 1~8을 시작하기 전에 `skills` CLI 실행 가능성을 먼저 점검하세요.
+
+- 아래 명령을 순서대로 시도해 `ok | blocked`를 기록합니다.
+  - `npx --yes skills --version`
+  - `npx --yes skills --help`
+  - `npx --yes skills find "test"`
+  - `npx --yes skills list`
+  - `npx --yes skills list -g`
+- 무출력 hang 판단 기준을 미리 정합니다(권장: 45초 무출력).
+- hang이 발생하면 즉시 중단 후 1회 재시도합니다.
+- 재시도도 실패하면 `blocked_cli_hang`으로 분류하고, Step 2/5/8에서 degraded 모드로 진행합니다.
+- 각 명령별로 `command`, `status`, `elapsed_sec`, `stderr_head`를 남겨 재현 가능하게 만드세요.
+
 ## Step 1) 프로젝트 분석
 
 프로젝트 목표, 기술 스택, 제약사항을 먼저 정리하세요.
@@ -62,9 +84,11 @@ description: 프로젝트에 필요한 스킬을 3채널(find-skills/인기/웹)
 `find-skills`를 이용해 프로젝트 맞춤 후보를 수집하세요.
 
 - 필요 시 `npx --yes skills add vercel-labs/skills --skill find-skills -y`로 준비합니다.
-- 프로젝트 키워드 기반 질의를 2~3개 실행합니다.
+- 프로젝트 키워드 기반 질의를 2~3개 실행합니다(반드시 `find "<query>"` 형태).
 - raw 결과와 함께 `owner/repo@skill`, 설치 지표, 한 줄 근거를 정리합니다.
 - 채널 수행 결과를 `done | blocked`로 기록하고, `blocked`면 원인/영향을 함께 남깁니다.
+- 2~3개 질의가 모두 `blocked_cli_hang`이면 `find` 채널을 `blocked`로 닫고 Step 3~6으로 진행합니다.
+- `find` 채널 차단 시 Step 6에서 `method_count`를 절대 게이트로 쓰지 말고 보정 규칙을 적용합니다.
 
 결과는 `candidates.find.md`로 정리하세요.
 
@@ -77,6 +101,11 @@ description: 프로젝트에 필요한 스킬을 3채널(find-skills/인기/웹)
 - 각 후보에 근거 URL을 남깁니다.
 - 지표 정의(예: installs, ranking, stars)와 확인 시각을 남깁니다.
 - 채널 수행 결과를 `done | blocked`로 기록하고, `blocked`면 원인/영향을 함께 남깁니다.
+- 인기 지표 소스 우선순위는 다음과 같이 고정합니다.
+  1. `skills.sh/<owner>/<repo>/<skill>` 상세 페이지 설치 지표
+  2. `npx --yes skills find "<query>"` 결과의 installs
+  3. GitHub API 저장소 지표(`stargazers_count`, `pushed_at`)
+- 각 지표에 `metric_source`, `raw_value`, `checked_at_utc`를 함께 기록해 재현성을 확보하세요.
 
 결과는 `candidates.popular.md`로 정리하세요.
 
@@ -95,9 +124,14 @@ description: 프로젝트에 필요한 스킬을 3채널(find-skills/인기/웹)
 
 현재 환경에 이미 설치된 스킬 목록을 수집하고 정규화하세요.
 
-- 설치 목록 조회 명령을 먼저 확인하고(예: `npx --yes skills --help`), 지원되는 목록 명령을 사용하세요.
+- 설치 목록 조회 명령을 먼저 확인하고(예: `npx --yes skills --help`), 아래 순서로 수집하세요.
+  1. `npx --yes skills list` (project scope)
+  2. `npx --yes skills list -g` (global scope)
 - 조회 결과를 `owner/repo@skill` 형식으로 정규화합니다.
-- 목록 조회가 막히면 `blocked`로 기록하고 원인/영향을 남깁니다.
+- 두 명령 중 하나라도 실패하면 fallback으로 아래 경로를 스캔합니다.
+  - `~/.agents/skills/*/SKILL.md`
+  - `<project>/.agents/skills/*/SKILL.md`
+- 결과 문서에 `inventory_coverage: complete|partial|blocked`를 반드시 기록합니다.
 
 결과는 `inventory.installed.md`로 정리하세요.
 
@@ -136,6 +170,12 @@ description: 프로젝트에 필요한 스킬을 3채널(find-skills/인기/웹)
 - `remove`: 기존 설치 + (`rejected` 또는 중복 대체안) + 제거 근거/영향 정리 완료
 - `hold`: 근거 부족/차단으로 즉시 변경 불가
 
+차단 채널 보정 규칙:
+
+- `method_count`는 참고 지표이며, 채널이 `blocked`인 실행에서는 절대 게이트로 사용하지 않습니다.
+- 채널 차단이 있을 때는 `SKILL.md` 본문 통과 + 근거 URL 2개 이상 + 적합성 `high|medium`이면 `approved` 가능으로 처리합니다.
+- 차단으로 인한 보정 여부를 `review.manifest.md`의 `rationale`에 명시하세요.
+
 ## Step 7) 최종 스킬 셋 결정(dry-run)
 
 `review.manifest.md`를 바탕으로 현재 셋 대비 목표 셋의 차이를 명시하세요.
@@ -148,10 +188,12 @@ description: 프로젝트에 필요한 스킬을 3채널(find-skills/인기/웹)
 
 실행은 `install.plan.md`의 dry-run 계획을 기준으로 진행하세요.
 
+0. 설치/삭제 직전에 실행 가능성 재확인(`npx --yes skills --help`, `npx --yes skills list`)을 수행합니다.
 1. `install` 대상은 설치를 실행하고 결과를 기록합니다.
 2. `remove` 대상은 삭제를 실행하고 결과를 기록합니다.
 3. `keep`/`hold` 대상은 변경 없이 판단 근거를 결과 문서에 기록합니다.
-4. `install.result.md`에 성공/실패/원인/재시도 계획을 남깁니다.
+4. 재확인 실패 시 변경 실행을 중단하고 `deferred_blocked_cli`로 기록합니다.
+5. `install.result.md`에 성공/실패/원인/재시도 조건(`next_retry_condition`)을 남깁니다.
 
 명령 예시:
 
@@ -170,6 +212,10 @@ npx --yes skills remove <owner/repo> --skill <skill-name> -y
 - 기존 설치 스킬은 모두 `keep | remove | hold` 중 하나로 분류되어야 합니다.
 - 설치 실패를 숨기지 말고 `install.result.md`에 그대로 기록하세요.
 - 테스트/실행이 막힌 경우, 막힌 원인과 영향 범위를 분리해서 보고하세요.
+- 프리플라이트 결과(`preflight_status`)와 차단 코드(`blocked_cli_hang` 등)가 누락되면 미완료로 처리합니다.
+- `find`/`popular`/`web` 채널 상태를 `channel_health`로 남기고, 차단 시 `method_count` 보정 근거를 기록하세요.
+- 인벤토리 결과는 `inventory_coverage=complete|partial|blocked` 중 하나를 반드시 포함해야 합니다.
+- 적용 단계가 차단되면 `deferred_blocked_cli` 항목과 재시도 조건이 있어야 합니다.
 
 ## 최종 보고 형식
 
