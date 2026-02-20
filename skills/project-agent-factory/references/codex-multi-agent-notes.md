@@ -23,15 +23,20 @@
 
 - 프로젝트 스코프 원칙: 글로벌 `~/.codex`를 건드리지 않고, 프로젝트 내부 `.codex/`만 변경합니다.
 - 기능 플래그 원칙: 최종 상태에서 `.codex/config.toml`의 `features.multi_agent`는 반드시 `true`여야 합니다.
+- trust 게이트 원칙: `trust_status`는 placeholder가 아니라 `trusted|untrusted|unknown` 실제 값이어야 합니다.
+- 적용 모드 원칙: `untrusted|unknown`이면 Step 4를 생략하고 `plan_only` 보고(`scope_validation.md`, `apply_report.md`)를 남깁니다.
 - 추적성 원칙: 왜 해당 에이전트를 만들었는지 `agent_plan.tsv`의 `reason(source_id 포함)`에 남깁니다.
 - 안전 원칙: 생성/갱신/삭제 경로를 모두 기록하고, 프로젝트 루트 바깥 변경이 없는지 `scope_validation.md`로 검증합니다.
 
 ## 수동 검증 체크
 
+- `apply_mode=plan_only`에서는 trust/scope/report 정합만 확인하고, `.codex` 파일 존재 기반 체크는 생략 가능
 - `.codex/config.toml`에 managed block이 있고 `agent_plan.tsv`와 엔트리 수/ID가 일치하는지 확인
 - 각 `[agents."<id>"]`의 `config_file`이 `agents/*.toml` 형식인지 확인
+- Step 3.5 제약(헤더/빈값/중복/패턴/enum/source_id 연결성)을 통과했는지 확인
 - 각 역할 파일에 `model`, `model_reasoning_effort`, `sandbox_mode`, `developer_instructions`가 존재하는지 확인
 - stale managed 파일이 제거되었는지 확인
+- zsh no-match 회피를 위해 `.codex/agents/*.toml` 글롭 대신 `rg ... .codex/agents -g '*.toml'` 형식을 사용
 
 ## 공식 문서
 

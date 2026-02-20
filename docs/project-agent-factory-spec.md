@@ -25,6 +25,10 @@
 - `scope_validation.md`
 - `apply_report.md`
 
+산출물 생성 규칙:
+- 위 6개 산출물은 `full_apply|plan_only` 모두에서 생성한다.
+- `plan_only`일 때 `scope_validation.md`의 `checked_paths`는 `none(plan_only)`로 기록한다.
+
 ### 3) 표준 파이프라인
 
 1. Step 0: 프로젝트 루트 고정 + run 디렉터리 준비
@@ -32,13 +36,15 @@
 3. Step 1: 프로젝트 분석
 4. Step 2: 공식/사례 소스 검증
 5. Step 3: 에이전트 계획 생성
-6. Step 4: `.codex/config.toml`, `.codex/agents/*.toml` 직접 반영
-7. Step 5: 범위/정합성 검증 및 감사 보고
+6. Step 3.5: `agent_plan.tsv` 정합성 검증 (fail-fast)
+7. Step 4: `.codex/config.toml`, `.codex/agents/*.toml` 직접 반영
+8. Step 5: 범위/정합성 검증 및 감사 보고
 
 ### 4) Trust Gate (Fail-Closed)
 
-- 신뢰 상태(`trust_status`)가 `trusted`로 확인되기 전에는 Step 4~5를 수행하지 않는다.
-- `untrusted` 또는 `unknown`이면 Step 1~3까지만 수행하고 `apply_report.md`에 blocked 사유를 기록한다.
+- `trust_preflight.md`의 `trust_status`는 placeholder 문자열이 아니라 `trusted|untrusted|unknown` 중 하나의 실제 값이어야 한다.
+- 신뢰 상태(`trust_status`)가 `trusted`로 확인되고 Step 3.5가 통과되기 전에는 Step 4를 수행하지 않는다.
+- `untrusted` 또는 `unknown`이면 Step 4를 생략하고, Step 5를 `apply_mode=plan_only`로 수행한다.
 - false success 방지 원칙:
   - 파일 생성 여부가 아니라, trusted 상태에서 프로젝트 `.codex` 레이어가 유효 반영되는지로 성공을 판단한다.
 
@@ -64,6 +70,9 @@
   - `reason`은 `project_profile.md` 근거 + `source_review.tsv`의 `source_id`를 포함
   - `model_reasoning_effort`는 `minimal|low|medium|high|xhigh`
   - `sandbox_mode`는 `read-only|workspace-write|danger-full-access`
+- Step 3.5 fail-fast 검증:
+  - 헤더/컬럼 수/빈값/중복/패턴/enum 제약을 적용 전 확인
+  - `agent_plan.tsv`의 `reason`에 나온 `source_id`가 `source_review.tsv`에 실제 존재하는지 확인
 
 ### 7) 반영/검증 계약
 
@@ -73,19 +82,23 @@
   - `[features] multi_agent = true` 보장
   - 이번 계획에 없는 stale managed agent 파일 정리
 - 검증 시:
+  - `trust_status`가 placeholder가 아닌 실제 값인지 확인
   - 변경 경로가 프로젝트 루트 밖으로 나가지 않았는지 확인
-  - managed block의 role 목록과 `agent_plan.tsv` 일치 여부 확인
-  - 각 `config_file`과 `config_relpath` 일치 여부 확인
+  - `apply_mode=full_apply`에서만 managed block의 role 목록과 `agent_plan.tsv` 일치 여부를 확인
+  - `apply_mode=full_apply`에서만 각 `config_file`과 `config_relpath` 일치 여부를 확인
+  - `apply_mode=plan_only`에서는 `scope_validation.md`에 `checked_paths=none(plan_only)` 기록 여부를 확인
+  - zsh no-match를 피하기 위해 `rg ... .codex/agents -g '*.toml'` 형태를 사용한다.
 
 ### 8) 리뷰 체크리스트 (PR/수정 공통)
 
-1. 파이프라인 순서(0 → 0.5 → 1 → 2 → 3 → 4 → 5)가 유지되는가?
+1. 파이프라인 순서(0 → 0.5 → 1 → 2 → 3 → 3.5 → 4 → 5)가 유지되는가?
 2. trust fail-closed 정책이 약화되지 않았는가?
 3. `source_review.tsv` 계약이 SKILL.md와 references 사이에서 중복/충돌 없이 SSOT를 따르는가?
 4. 샘플 URL/도메인 규칙이 실제로 유효한가?
-5. 산출물 템플릿(`trust_preflight.md`, `apply_report.md`, `scope_validation.md`)이 최신 계약과 일치하는가?
-6. 레거시 자동 스크립트 의존이 재도입되지 않았는가?
-7. README에 상세 규정 복붙이 없고, 스펙 문서 링크만 유지되는가?
+5. `trust_status` placeholder가 남아도 통과되는 경로가 없는가?
+6. 산출물 템플릿(`trust_preflight.md`, `apply_report.md`, `scope_validation.md`)이 최신 계약과 일치하는가?
+7. 레거시 자동 스크립트 의존이 재도입되지 않았는가?
+8. README에 상세 규정 복붙이 없고, 스펙 문서 링크만 유지되는가?
 
 ### 9) 개발 규제 (Hard Constraints)
 

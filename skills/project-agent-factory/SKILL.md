@@ -17,6 +17,7 @@ description: 프로젝트에 필요한 Codex 멀티 에이전트를 설계/생�
 1. 프로젝트 분석 (`project_profile.md`)
 2. 공식/사례 검증 (`source_review.tsv`)
 3. 멀티 에이전트 계획 생성 (`agent_plan.tsv`)
+3.5. 계획 정합성 검증 (fail-fast)
 4. 계획 반영 (직접 파일 편집)
 5. 결과 감사 (`apply_report.md`, `scope_validation.md`)
 
@@ -46,18 +47,18 @@ generated_at_utc: $NOW_UTC
 project_root: $PROJECT_ROOT
 
 - requirement: project must be trusted before applying .codex changes
-- trust_status: trusted|untrusted|unknown
+- trust_status: <set_after_check: trusted|untrusted|unknown>
 - evidence:
   - (예) Codex UI/CLI에서 trusted 상태 확인
   - (예) 세션 재시작 후 프로젝트 .codex 설정이 유효하게 반영됨을 확인
-- action_if_not_trusted: stop_after_step_3
+- action_if_not_trusted: skip_step_4_and_run_step_5_plan_only
 EOF
 ```
 
 실행 규칙:
-- `trust_status=trusted`가 확인되기 전에는 Step 4~5를 수행하지 않습니다.
-- `untrusted|unknown`이면 Step 1~3(분석/계획)까지만 수행하고,
-  `apply_report.md`에 `blocked: project_untrusted_or_unverified`를 기록한 뒤 종료합니다.
+- `trust_status`는 템플릿 문자열이 아니라 `trusted|untrusted|unknown` 중 하나의 실제 값으로 확정해야 합니다.
+- `trust_status=trusted` + Step 3.5 통과 전에는 Step 4를 수행하지 않습니다.
+- `untrusted|unknown`이면 Step 4(반영)를 건너뛰고, Step 5를 `apply_mode=plan_only`로 수행합니다.
 
 ## Step 1) 프로젝트 분석 (`project_profile.md`)
 
@@ -102,7 +103,7 @@ cat > "$RUN_DIR/source_review.tsv" <<TSV
 source_id	source_type	url	checked_at_utc	relevance_note	key_constraints
 official-1	official	https://developers.openai.com/codex/multi-agent	$NOW_UTC	multi_agent 기능 플래그 및 에이전트 등록 키 검증	experimental 기능/버전 차이 확인 필요
 github-1	github	https://github.com/openai/codex/pull/11917	$NOW_UTC	config_file 분리형 role 구성 사례 검증	PR 기준이므로 현재 CLI 버전과 교차 확인 필요
-web-1	web	https://platform.claude.com/docs/en/agents-and-tools/overview	$NOW_UTC	역할 분해/오케스트레이션 패턴 참고	Codex 설정 키의 1차 근거로 사용하지 않음
+web-1	web	https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/ai-agent-design-patterns	$NOW_UTC	역할 분해/오케스트레이션 패턴 참고	Codex 설정 키의 1차 근거로 사용하지 않음
 TSV
 ```
 
@@ -134,13 +135,50 @@ paf_explorer	Project Explorer	10	stack-map(package+tests), source=official-1 web
 paf_implementer	Project Implementer	20	delivery-path(api+ui), source=github-1 official-1	agents/paf_implementer.toml	Implement scoped changes with verification.	Apply requested edits and run available checks.	gpt-5	high	workspace-write
 ```
 
+## Step 3.5) `agent_plan.tsv` 정합성 검증 (fail-fast)
+
+Step 4로 넘어가기 전에 아래 검증을 통과해야 합니다.
+
+```bash
+awk -F'\t' '
+BEGIN {
+  expected="agent_id\trole_name\tpriority\treason\tconfig_relpath\tdescription\tdeveloper_instructions\tmodel\tmodel_reasoning_effort\tsandbox_mode"
+  split("minimal low medium high xhigh", e, " "); for (i in e) eff[e[i]]=1
+  split("read-only workspace-write danger-full-access", s, " "); for (i in s) sandbox[s[i]]=1
+}
+NR==1 {
+  if ($0 != expected) { print "ERR header mismatch"; bad=1 }
+  next
+}
+{
+  if (NF != 10) { print "ERR col_count line=" NR; bad=1; next }
+  for (i=1; i<=10; i++) if ($i == "") { print "ERR empty_col line=" NR " col=" i; bad=1 }
+  if ($1 !~ /^[A-Za-z0-9._-]+$/) { print "ERR agent_id line=" NR " value=" $1; bad=1 }
+  if ($3 !~ /^[1-9][0-9]*$/) { print "ERR priority line=" NR " value=" $3; bad=1 }
+  if ($5 !~ /^agents\/[A-Za-z0-9._-]+\.toml$/) { print "ERR config_relpath line=" NR " value=" $5; bad=1 }
+  if (!($9 in eff)) { print "ERR model_reasoning_effort line=" NR " value=" $9; bad=1 }
+  if (!($10 in sandbox)) { print "ERR sandbox_mode line=" NR " value=" $10; bad=1 }
+  if ($4 !~ /(official|github|web)-[0-9]+/) { print "ERR reason_missing_source_id line=" NR; bad=1 }
+  if (++aid[$1] > 1) { print "ERR duplicate agent_id=" $1; bad=1 }
+  if (++cfg[$5] > 1) { print "ERR duplicate config_relpath=" $5; bad=1 }
+}
+END { exit bad ? 1 : 0 }
+' "$RUN_DIR/agent_plan.tsv"
+
+cut -f1 "$RUN_DIR/source_review.tsv" | tail -n +2 | sort -u > "$RUN_DIR/source_ids.txt"
+rg -o '(official|github|web)-[0-9]+' "$RUN_DIR/agent_plan.tsv" | sort -u > "$RUN_DIR/reason_source_ids.txt"
+comm -23 "$RUN_DIR/reason_source_ids.txt" "$RUN_DIR/source_ids.txt" > "$RUN_DIR/missing_source_ids.txt"
+test ! -s "$RUN_DIR/missing_source_ids.txt"
+```
+
 ## Step 4) 계획 반영 (직접 파일 편집)
 
 자동 스크립트 없이 아래를 직접 반영합니다.
 
 사전 조건:
 - `trust_preflight.md`의 `trust_status=trusted`가 확인된 경우에만 실행합니다.
-- `untrusted|unknown`이면 Step 4~5를 건너뛰고 `apply_report.md`에 blocked 상태를 남깁니다.
+- Step 3.5 정합성 검증을 통과한 경우에만 실행합니다.
+- `untrusted|unknown`이면 Step 4는 건너뜁니다(보고는 Step 5에서 수행).
 
 1. `.codex/<config_relpath>` 생성/갱신
 - 파일 상단에 `# managed_by=project-agent-factory` 마커를 남깁니다.
@@ -190,20 +228,30 @@ config_file = "<config_relpath>"
 
 ## Step 5) 결과 검증 (`scope_validation.md` + `apply_report.md`)
 
+Step 5는 항상 수행합니다.
+- `full_apply`: Step 4 반영 이후 검증/보고
+- `plan_only`: Step 4 생략 후 검증/보고(변경 경로는 `none`으로 기록)
+
 검증 체크:
 - `trust_preflight.md`의 trust 상태와 실제 수행 범위가 일치하는지 확인
 - 모든 생성/갱신 파일 경로가 `<project-root>/.codex/` 하위인지 확인
-- `.codex/config.toml`에 `multi_agent = true` 존재 확인
-- managed block의 agent 목록과 `agent_plan.tsv`가 일치하는지 확인
-- 각 `config_file` 경로가 `agents/*.toml` 형식이며 해당 행의 `config_relpath`와 일치하는지 확인
+- `apply_mode=full_apply`인 경우에만 아래를 추가 확인:
+  - `.codex/config.toml`에 `multi_agent = true` 존재 확인
+  - managed block의 agent 목록과 `agent_plan.tsv`가 일치하는지 확인
+  - 각 `config_file` 경로가 `agents/*.toml` 형식이며 해당 행의 `config_relpath`와 일치하는지 확인
 
 권장 확인 명령:
 
 ```bash
-rg -n '^-\s+trust_status:\s+' "$RUN_DIR/trust_preflight.md"
-rg -n '^\[features\]|^multi_agent\s*=' .codex/config.toml
-rg -n '^\[agents\.".*"\]$|^config_file\s*=\s*"agents/[A-Za-z0-9._-]+\.toml"$' .codex/config.toml
-rg -n '^# managed_by=project-agent-factory$|^model\s*=|^model_reasoning_effort\s*=|^sandbox_mode\s*=|^developer_instructions\s*=' .codex/agents/*.toml
+rg -n '^-\\s+trust_status:\\s+(trusted|untrusted|unknown)$' "$RUN_DIR/trust_preflight.md"
+! rg -n '^-\\s+trust_status:\\s+<set_after_check:' "$RUN_DIR/trust_preflight.md"
+if [ -f .codex/config.toml ]; then
+  rg -n '^\[features\]|^multi_agent\s*=' .codex/config.toml
+  rg -n '^\[agents\.".*"\]$|^config_file\s*=\s*"agents/[A-Za-z0-9._-]+\.toml"$' .codex/config.toml
+else
+  echo "INFO: .codex/config.toml not found (plan_only 경로일 수 있음)"
+fi
+rg -n '^# managed_by=project-agent-factory$|^model\s*=|^model_reasoning_effort\s*=|^sandbox_mode\s*=|^developer_instructions\s*=' .codex/agents -g '*.toml' || true
 ```
 
 `scope_validation.md` 템플릿:
@@ -212,9 +260,10 @@ rg -n '^# managed_by=project-agent-factory$|^model\s*=|^model_reasoning_effort\s
 # Scope Validation
 generated_at_utc: <YYYY-MM-DDTHH:MM:SSZ>
 project_root: <path>
+apply_mode: full_apply|plan_only
 
 - checked_paths:
-  - <path>
+  - <path>|none(plan_only)
 - outside_scope_paths:
   - none
 - result: pass|fail

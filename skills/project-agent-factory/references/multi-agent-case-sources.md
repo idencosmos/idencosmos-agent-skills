@@ -26,11 +26,12 @@
   - `https://github.com/openai/codex/pull/8376` (`developer_instructions` 설정 문서화 변경 근거)
   - `https://github.com/openai/codex/releases/tag/rust-v0.79.0` (멀티 에이전트 관련 릴리스 노트)
 - GitHub 외 웹 사례:
-  - `https://platform.claude.com/docs/en/agents-and-tools/overview` (역할 분해/오케스트레이션 패턴 참고)
+  - `https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/ai-agent-design-patterns` (역할 분해/오케스트레이션 패턴 참고)
   - `https://platform.claude.com/docs/en/agent-sdk/subagents` (서브에이전트 협업 패턴 참고)
   - `https://microsoft.github.io/autogen/stable/user-guide/core-user-guide/design-patterns/mixture-of-agents.html` (역할 분해/협업 패턴 참고)
 
 위 링크만 복사하지 말고, 현재 프로젝트 요구와 직접 연결되는 근거를 반드시 작성하세요.
+추천 시작 소스도 시간에 따라 invalid가 될 수 있으므로, 수집 시점에 상태를 다시 확인하고 교체하세요.
 
 ## source_review.tsv 계약
 
