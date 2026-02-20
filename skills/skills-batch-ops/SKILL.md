@@ -1,18 +1,20 @@
 ---
 name: skills-batch-ops
-description: 프로젝트에 필요한 스킬을 3채널(find-skills/인기/웹)로 탐색해 합집합 후보를 만들고, 실제 SKILL.md 본문 검토와 유사 스킬 비교를 거쳐 최적 조합만 설치할 때 사용하는 Markdown 지시형 스킬입니다.
+description: 프로젝트에 필요한 스킬을 3채널(find-skills/인기/웹)로 탐색하고 기존 설치 스킬까지 동일 기준으로 검토해 최종 스킬 셋(keep/install/remove)을 적용할 때 사용하는 Markdown 지시형 스킬입니다.
 ---
 
 # Skills Batch Ops
 
-`skills-batch-ops`는 아래 6단계를 고정으로 수행하는 문서 지시형 스킬입니다.
+`skills-batch-ops`는 아래 8단계를 고정으로 수행하는 문서 지시형 스킬입니다.
 
 1. 프로젝트 분석
 2. `find-skills` 기반 후보 탐색
 3. 인기/사용량 기반 후보 탐색
 4. 인터넷 검색 기반 후보 탐색
-5. 합집합 병합 + 실제 `SKILL.md` 본문 검토 + 유사/중복 후보 대표 선정
-6. 최종 승인 후보 설치
+5. 기존 설치 스킬 인벤토리 수집
+6. 합집합 병합 + 전체 `SKILL.md` 본문 검토 + 유사/중복 후보 대표 선정
+7. 최종 스킬 셋 결정(dry-run)
+8. 최종 스킬 셋 적용(install/remove) 및 결과 기록
 
 ## 실행 원칙
 
@@ -21,8 +23,10 @@ description: 프로젝트에 필요한 스킬을 3채널(find-skills/인기/웹)
 - 채널이 막히면 억지로 채우지 말고 `blocked`로 기록하세요.
 - 후보 병합은 교집합이 아니라 합집합 기준으로 수행하세요.
 - 스킬 이름만 보고 설치하지 말고, 반드시 실제 `SKILL.md` 본문을 확인하세요.
+- 기존 설치 스킬도 신규 후보와 동일한 깊이로 `SKILL.md` 본문을 검토하세요.
 - 유사 기능군에서는 대표 스킬을 선정하고 나머지는 대체안으로 남기세요.
-- 설치 전에는 반드시 dry-run 계획을 먼저 제시하세요.
+- 최종 결정은 반드시 `keep | install | remove | hold` 중 하나로 명시하세요.
+- 설치/삭제 전에는 반드시 dry-run 계획을 먼저 제시하세요.
 - 정보가 부족해도 질문을 남발하지 말고, 합리적 기본 가정을 적용한 뒤 `가정/영향`을 기록하세요.
 - 본 스킬의 결과물 구조는 `SKILL.md`와 `references/*.md`만 허용합니다.
 
@@ -34,6 +38,7 @@ description: 프로젝트에 필요한 스킬을 3채널(find-skills/인기/웹)
 - `candidates.find.md`
 - `candidates.popular.md`
 - `candidates.web.md`
+- `inventory.installed.md`
 - `candidates.merged.md`
 - `review.content.md`
 - `review.manifest.md`
@@ -86,12 +91,22 @@ description: 프로젝트에 필요한 스킬을 3채널(find-skills/인기/웹)
 
 결과는 `candidates.web.md`로 정리하세요.
 
-## Step 5) 합집합 병합 + 실제 `SKILL.md` 본문 검토 + 유사/중복 정리
+## Step 5) 기존 설치 스킬 인벤토리 수집
 
-2~4단계에서 모은 후보를 합집합으로 병합한 뒤, 각 후보의 실제 `SKILL.md`를 확인하고 유사 후보를 정리하세요.
+현재 환경에 이미 설치된 스킬 목록을 수집하고 정규화하세요.
+
+- 설치 목록 조회 명령을 먼저 확인하고(예: `npx --yes skills --help`), 지원되는 목록 명령을 사용하세요.
+- 조회 결과를 `owner/repo@skill` 형식으로 정규화합니다.
+- 목록 조회가 막히면 `blocked`로 기록하고 원인/영향을 남깁니다.
+
+결과는 `inventory.installed.md`로 정리하세요.
+
+## Step 6) 합집합 병합 + 전체 `SKILL.md` 본문 검토 + 유사/중복 정리
+
+2~5단계에서 모은 후보(탐색+기존 설치)를 합집합으로 병합한 뒤, 각 후보의 실제 `SKILL.md`를 확인하고 유사 후보를 정리하세요.
 
 - 우선 후보 병합표를 `candidates.merged.md`에 합집합 기준으로 만듭니다.
-- 각 후보에 대해 실제 `SKILL.md`를 찾아 읽습니다.
+- 각 후보에 대해 실제 `SKILL.md`를 찾아 읽습니다(기존 설치 스킬 포함).
 - 아래 항목을 반드시 확인하세요:
   - frontmatter `name`, `description` 유효성
   - 본문이 구체적 워크플로를 제공하는지
@@ -99,13 +114,14 @@ description: 프로젝트에 필요한 스킬을 3채널(find-skills/인기/웹)
   - 프로젝트 키워드와의 실질 적합성
 - 유사/중복 후보를 기능 기준으로 클러스터링하고 대표 스킬을 선정합니다.
 - 동일 기능군에서 여러 스킬을 설치하려면 보완 관계를 근거로 제시하세요.
+- 기존 설치 스킬도 최종 액션(`keep | remove | hold`)을 반드시 부여하세요.
 
 검토 기준 상세는 `references/skill-content-review-rubric.md`를 사용하세요.
 
 검토 결과:
 
-- `review.content.md`: 후보별 본문 검토 상세
-- `review.manifest.md`: `approved | pending | rejected` 최종 판정과 선정/대체안 기록
+- `review.content.md`: 후보별 본문 검토 상세(탐색+기존 설치)
+- `review.manifest.md`: `approved | pending | rejected` 판정 + `keep | install | remove | hold` 최종 액션
 
 권장 판정 규칙:
 
@@ -113,25 +129,45 @@ description: 프로젝트에 필요한 스킬을 3채널(find-skills/인기/웹)
 - `pending`: 본문은 양호하지만 근거나 적합성, 실행 가능성 보완 필요
 - `rejected`: 본문 검토 실패 또는 프로젝트와 부적합
 
-## Step 6) 필요한 스킬 설치
+권장 액션 규칙:
 
-설치는 `review.manifest.md`에서 `approved`만 대상으로 진행하세요.
+- `keep`: 기존 설치 + `approved` + 최종 세트에 유지
+- `install`: 미설치 + `approved` + 최종 세트에 포함
+- `remove`: 기존 설치 + (`rejected` 또는 중복 대체안) + 제거 근거/영향 정리 완료
+- `hold`: 근거 부족/차단으로 즉시 변경 불가
 
-1. 먼저 `install.plan.md`에 dry-run 계획을 작성합니다.
-2. 승인된 항목별 설치 명령을 준비합니다.
-3. 실설치 실행 후 `install.result.md`에 성공/실패/원인/재시도 계획을 기록합니다.
+## Step 7) 최종 스킬 셋 결정(dry-run)
+
+`review.manifest.md`를 바탕으로 현재 셋 대비 목표 셋의 차이를 명시하세요.
+
+1. `install.plan.md`에 현재 셋, 목표 셋, 액션별 목록(`keep/install/remove/hold`)을 작성합니다.
+2. 설치/삭제 명령을 액션별로 분리해 작성합니다.
+3. 삭제 대상은 롤백 경로(재설치 명령)와 영향 범위를 함께 기록합니다.
+
+## Step 8) 최종 스킬 셋 적용(install/remove) 및 결과 기록
+
+실행은 `install.plan.md`의 dry-run 계획을 기준으로 진행하세요.
+
+1. `install` 대상은 설치를 실행하고 결과를 기록합니다.
+2. `remove` 대상은 삭제를 실행하고 결과를 기록합니다.
+3. `keep`/`hold` 대상은 변경 없이 판단 근거를 결과 문서에 기록합니다.
+4. `install.result.md`에 성공/실패/원인/재시도 계획을 남깁니다.
 
 명령 예시:
 
 ```bash
 npx --yes skills add <owner/repo> --skill <skill-name> -y
+npx --yes skills remove <owner/repo> --skill <skill-name> -y
 ```
 
 ## 품질 게이트
 
 - 3개 탐색 채널은 모두 시도하되, 실패/차단 시 `blocked` 기록과 영향 보고가 있으면 완료로 처리할 수 있습니다.
+- 기존 설치 스킬 인벤토리도 반드시 시도하고, 실패 시 `blocked` 사유를 기록하세요.
 - 실제 `SKILL.md`를 읽지 않은 후보는 `approved`로 올리지 마세요.
+- 실제 `SKILL.md`를 읽지 않은 기존 설치 스킬은 `keep`로 확정하지 마세요.
 - 유사군 내 다중 `approved`는 보완 관계 근거가 없으면 허용하지 마세요.
+- 기존 설치 스킬은 모두 `keep | remove | hold` 중 하나로 분류되어야 합니다.
 - 설치 실패를 숨기지 말고 `install.result.md`에 그대로 기록하세요.
 - 테스트/실행이 막힌 경우, 막힌 원인과 영향 범위를 분리해서 보고하세요.
 
@@ -141,10 +177,12 @@ npx --yes skills add <owner/repo> --skill <skill-name> -y
 
 1. 프로젝트 분석 요약
 2. 채널별 탐색 결과(find/popular/web)
-3. 합집합 병합 및 유사/중복 정리 결과(대표/대체안)
-4. `SKILL.md` 본문 검토 요약(통과/실패 사유)
-5. 설치 계획 또는 설치 결과
-6. 남은 리스크/추가 확인 항목
+3. 기존 설치 스킬 인벤토리 요약
+4. 합집합 병합 및 유사/중복 정리 결과(대표/대체안)
+5. `SKILL.md` 본문 검토 요약(통과/실패 사유)
+6. 최종 스킬 셋 diff(`keep/install/remove/hold`)
+7. 설치/삭제 계획 또는 실행 결과
+8. 남은 리스크/추가 확인 항목
 
 ## References
 

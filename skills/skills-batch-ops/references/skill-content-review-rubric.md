@@ -1,6 +1,6 @@
 # Skill Content Review Rubric
 
-후보 스킬을 이름이 아니라 실제 `SKILL.md` 본문으로 검토하고, 유사군 대표를 선정하기 위한 기준입니다.
+후보 스킬과 기존 설치 스킬을 이름이 아니라 실제 `SKILL.md` 본문으로 검토하고, 유사군 대표 및 최종 액션을 결정하기 위한 기준입니다.
 
 ## A. 위치 확인
 
@@ -49,12 +49,29 @@
 - `method_count`는 가산점이지 필수 통과 조건이 아닙니다.
 - 동일 유사군에서 `approved`를 여러 개 주려면 상호 보완 관계를 명시해야 합니다.
 
-## E. 기록 원칙
+## E. 기존 설치 스킬 동등 검토 원칙
+
+- 기존 설치 스킬도 신규 후보와 동일하게 A~D를 적용합니다.
+- 기존 설치 스킬은 "이미 설치됨"만으로 `approved` 또는 `keep` 처리하지 않습니다.
+- 기존 설치 스킬이 `SKILL.md` 본문 검토 실패면 `remove` 우선 후보로 분류합니다.
+- 기존 설치 스킬이 중복 대체안이면 제거 리스크를 검토한 뒤 `remove` 또는 `hold`로 분류합니다.
+
+## F. 최종 액션 규칙
+
+판정 결과와 설치 상태를 함께 보고 최종 액션을 정합니다.
+
+- `keep`: `installed_state=installed` and `final_status=approved` and 대표 선정(`selection=selected`)
+- `install`: `installed_state=not_installed` and `final_status=approved` and 대표 선정(`selection=selected`)
+- `remove`: `installed_state=installed` and (`final_status=rejected` or `selection=alternate`) and 제거 리스크 허용 가능
+- `hold`: 근거 부족, 채널 차단, 제거 리스크 미해소 등 즉시 변경이 어려운 상태
+
+## G. 기록 원칙
 
 각 후보마다 아래를 남깁니다.
 
 - 확인한 `SKILL.md` URL
 - 통과/실패 사유(한 줄이 아닌 구체 문장)
 - 프로젝트와의 관련 키워드
+- 출처(`origin=discovered|installed|both`)와 설치 상태(`installed_state`)
 - 유사군 식별자(`cluster_key`)와 선정 상태(`selected|alternate|hold`)
-- 최종 판정(`approved|pending|rejected`)
+- 최종 판정(`approved|pending|rejected`)과 최종 액션(`keep|install|remove|hold`)
