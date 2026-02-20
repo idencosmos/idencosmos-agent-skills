@@ -1,6 +1,6 @@
 # Multi-Agent Case Sources
 
-`project-agent-factory`의 계획 생성 단계에서 소스를 검증할 때 이 문서를 사용하세요.
+`project-agent-factory`의 계획 생성 단계에서 소스를 검증할 때 사용하는 기준입니다.
 
 ## 최소 수집 기준
 
@@ -8,7 +8,7 @@
 
 1. `official`: Codex 공식 문서
 2. `github`: GitHub의 실제 멀티 에이전트 사례(이슈/PR/템플릿/코드)
-3. `web`: GitHub 외 공개 웹 자료(블로그/가이드/문서)
+3. `web`: GitHub/OpenAI 공식 도메인 외 공개 웹 자료(블로그/가이드/문서)
 
 권장 최소 개수:
 - `official` 1개 이상
@@ -24,10 +24,10 @@
   - `https://github.com/openai/codex/pull/8783` (agent control 명령 기반 멀티 에이전트 실행 경로)
   - `https://github.com/openai/codex/pull/11917` (사용자 정의 role + `config_file` 분리 구성 사례)
   - `https://github.com/openai/codex/pull/8376` (`developer_instructions` 설정 문서화 변경 근거)
-  - `https://github.com/openai/codex/releases/tag/rust-v0.79.0` (멀티 대화/에이전트 제어 기능 릴리스 노트)
+  - `https://github.com/openai/codex/releases/tag/rust-v0.79.0` (멀티 에이전트 관련 릴리스 노트)
 - GitHub 외 웹 사례:
-  - `https://developers.openai.com/cookbook/examples/orchestrating_agents` (역할 분해/오케스트레이션 패턴 참고)
-  - `https://developers.openai.com/cookbook/examples/agents_sdk/parallel_agents` (역할 분해/병렬 실행 패턴 참고)
+  - `https://platform.claude.com/docs/en/build-with-claude/agentic-workflows` (역할 분해/오케스트레이션 패턴 참고)
+  - `https://microsoft.github.io/autogen/stable/user-guide/core-user-guide/design-patterns/mixture-of-agents.html` (역할 분해/협업 패턴 참고)
 
 위 링크만 복사하지 말고, 현재 프로젝트 요구와 직접 연결되는 근거를 반드시 작성하세요.
 
@@ -43,7 +43,7 @@ source_id	source_type	url	checked_at_utc	relevance_note	key_constraints
 - `source_id`: `official-1`, `github-1`, `web-1`처럼 타입 접두어를 사용하세요.
 - `source_type`: `official|github|web` 중 하나만 사용하세요.
 - `source_type=github`: `github.com` 또는 `raw.githubusercontent.com` URL만 허용합니다.
-- `source_type=web`: GitHub 도메인을 제외한 공개 웹 URL만 허용합니다.
+- `source_type=web`: GitHub/OpenAI 공식 도메인을 제외한 공개 웹 URL만 허용합니다.
 - `source_type=official`: `developers.openai.com` 또는 `openai.com` URL만 사용하세요.
 - `url`: 실제 확인한 원문 URL을 기록하세요.
 - `checked_at_utc`: `YYYY-MM-DDTHH:MM:SSZ` 형식을 사용하세요.
@@ -60,4 +60,10 @@ source_id	source_type	url	checked_at_utc	relevance_note	key_constraints
 - 네트워크가 막혀 수집하지 못하면 `relevance_note`에 `blocked`를 기록하고 부분 검증으로 보고하세요.
 - GitHub 소스는 가능하면 PR/커밋/릴리스처럼 변경 근거가 추적되는 문서를 우선하세요.
 - `web` 소스는 Codex 설정 키의 1차 근거로 쓰지 말고, 역할 분해/오케스트레이션 패턴 보조 근거로만 사용하세요.
-- `apply-plan` 실행 시 `--source-review <source_review.tsv>`를 함께 전달해 스키마/도메인/연결성 검증을 자동화하세요.
+
+## 수동 연결성 체크 (Markdown-Only)
+
+`agent_plan.tsv` 작성 후 아래를 직접 확인하세요.
+- `reason`에 등장하는 `source_id`가 `source_review.tsv`에 모두 존재하는지
+- `official/github/web` 3종류가 모두 포함되었는지
+- URL 도메인 규칙이 타입과 일치하는지

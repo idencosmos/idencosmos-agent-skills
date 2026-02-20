@@ -11,12 +11,31 @@ from pathlib import Path
 FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n?", re.DOTALL)
 NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 ALLOWED_KEYS = {"name", "description", "license", "allowed-tools", "metadata", "compatibility"}
+PRIMARY_SKILL_MD = "SKILL.md"
+LEGACY_SKILL_MD = "SKILLS.md"
+
+
+def has_skill_markdown(skill_dir: Path) -> bool:
+    return (skill_dir / PRIMARY_SKILL_MD).exists() or (skill_dir / LEGACY_SKILL_MD).exists()
+
+
+def resolve_skill_markdown(skill_dir: Path) -> tuple[Path | None, list[str]]:
+    primary = skill_dir / PRIMARY_SKILL_MD
+    legacy = skill_dir / LEGACY_SKILL_MD
+
+    if primary.exists() and legacy.exists():
+        return None, [f"{skill_dir}: both {PRIMARY_SKILL_MD} and {LEGACY_SKILL_MD} exist; keep only {PRIMARY_SKILL_MD}"]
+    if primary.exists():
+        return primary, []
+    if legacy.exists():
+        return legacy, []
+    return None, [f"{skill_dir}: missing {PRIMARY_SKILL_MD}"]
 
 
 def parse_frontmatter(text: str) -> dict[str, str]:
     match = FRONTMATTER_RE.match(text)
     if not match:
-        raise ValueError("No valid frontmatter block found at top of SKILL.md")
+        raise ValueError("No valid frontmatter block found at top of skill markdown")
     data: dict[str, str] = {}
     for raw_line in match.group(1).splitlines():
         line = raw_line.strip()
@@ -31,9 +50,11 @@ def parse_frontmatter(text: str) -> dict[str, str]:
 
 def validate_skill_dir(skill_dir: Path) -> list[str]:
     errors: list[str] = []
-    skill_md = skill_dir / "SKILL.md"
-    if not skill_md.exists():
-        return [f"{skill_dir}: missing SKILL.md"]
+    skill_md, resolve_errors = resolve_skill_markdown(skill_dir)
+    if resolve_errors:
+        return resolve_errors
+    if skill_md is None:
+        return [f"{skill_dir}: missing {PRIMARY_SKILL_MD}"]
 
     text = skill_md.read_text(encoding="utf-8")
     try:
@@ -79,7 +100,7 @@ def main() -> int:
         return 1
 
     failures: list[str] = []
-    skill_dirs = sorted(d for d in root.iterdir() if d.is_dir())
+    skill_dirs = sorted(d for d in root.iterdir() if d.is_dir() and has_skill_markdown(d))
     if not skill_dirs:
         print("error: no skill directories found", file=sys.stderr)
         return 1
