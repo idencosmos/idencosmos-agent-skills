@@ -53,11 +53,42 @@ source_id	source_type	url	checked_at_utc	relevance_note	key_constraints
 - `key_constraints`: 적용 시 주의점/한계를 남기세요.
 - 동일한 URL을 타입만 바꿔 중복 기록하지 마세요.
 
+## source_probe.tsv 계약
+
+`source_review.tsv`와 별개로 연결성/본문 유효성 증빙을 남기세요.
+
+헤더:
+
+```tsv
+source_id	http_status	final_url	body_not_found	evidence_relpath	checked_at_utc	probe_note
+```
+
+컬럼 규칙:
+- `source_id`: `source_review.tsv`에 존재하는 동일 ID를 사용하세요.
+- `http_status`: `blocked` 또는 3자리 HTTP 코드(`200`, `301`, `404` 등)를 사용하세요.
+- `final_url`: 리다이렉트 이후 실제 최종 URL을 기록하세요.
+- `body_not_found`: `yes|no|blocked` 중 하나를 사용하세요.
+- `evidence_relpath`: `source_evidence/<source_id>.md` 형식 상대경로를 사용하세요.
+- `checked_at_utc`: `YYYY-MM-DDTHH:MM:SSZ` 형식을 사용하세요.
+- `probe_note`: 연결성/본문 판단 근거를 한 줄로 요약하세요.
+- `http_status`가 `2xx`인데 `body_not_found=yes`이면 invalid로 간주하고 URL을 교체하세요.
+
+## source_evidence 파일 계약
+
+- 각 `source_id`마다 `source_evidence/<source_id>.md` 파일을 만드세요.
+- 최소 포함 항목:
+  - `fetch_method`
+  - `http_status`
+  - `body_not_found`
+  - `evidence_note` (어떤 본문 단서를 보고 유효 판정했는지)
+- 네트워크 차단 시에도 파일은 만들고 `blocked` 사유를 남기세요.
+
 ## 품질 기준
 
 - 소스는 최신 상태를 확인하고 날짜를 남기세요.
 - 마케팅 소개 글보다 실제 설정/실행 예시가 있는 자료를 우선하세요.
 - 링크가 HTTP 200이어도 본문에 `Not Found` 또는 `Page not found`가 포함되면 invalid로 간주하고 다른 URL로 교체하세요.
+- `source_probe.tsv`와 `source_evidence/*.md`를 반드시 함께 남기고, 둘의 `source_id` 매핑이 일치해야 합니다.
 - `relevance_note`가 빈약하면 해당 소스는 계획 근거로 사용하지 마세요.
 - `reason`에서 사용할 수 있게 `source_id`를 명시적으로 추적하세요(예: `source=official-1 github-1`).
 - 네트워크가 막혀 수집하지 못하면 `relevance_note`에 `blocked`를 기록하고 부분 검증으로 보고하세요.
@@ -70,3 +101,5 @@ source_id	source_type	url	checked_at_utc	relevance_note	key_constraints
 - `reason`에 등장하는 `source_id`가 `source_review.tsv`에 모두 존재하는지
 - `official/github/web` 3종류가 모두 포함되었는지
 - URL 도메인 규칙이 타입과 일치하는지
+- `source_probe.tsv`의 `source_id` 집합이 `source_review.tsv`와 완전히 일치하는지
+- `source_probe.tsv`의 `evidence_relpath`가 실제 파일(`source_evidence/*.md`)로 존재하는지

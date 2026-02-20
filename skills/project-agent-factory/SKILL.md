@@ -10,12 +10,12 @@ description: 프로젝트에 필요한 Codex 멀티 에이전트를 설계/생�
 핵심 원칙:
 - 자동 적용 스크립트(`apply-plan` 등)를 사용하지 않습니다.
 - 반영은 AI가 직접 `.codex/config.toml`, `.codex/agents/*.toml`을 편집해서 수행합니다.
-- 모든 판단 근거는 실행 산출물(`project_profile.md`, `source_review.tsv`, `agent_plan.tsv`, `apply_report.md`)에 남깁니다.
+- 모든 판단 근거는 실행 산출물(`project_profile.md`, `source_review.tsv`, `source_probe.tsv`, `agent_plan.tsv`, `apply_report.md`)에 남깁니다.
 
 고정 파이프라인:
 0. trusted preflight (`trust_preflight.md`)
 1. 프로젝트 분석 (`project_profile.md`)
-2. 공식/사례 검증 (`source_review.tsv`)
+2. 공식/사례 검증 (`source_review.tsv`, `source_probe.tsv`)
 3. 멀티 에이전트 계획 생성 (`agent_plan.tsv`)
 3.5. 계획 정합성 검증 (fail-fast)
 4. 계획 반영 (직접 파일 편집)
@@ -27,12 +27,27 @@ description: 프로젝트에 필요한 Codex 멀티 에이전트를 설계/생�
 PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$PROJECT_ROOT"
 
-RUN_DIR="$PROJECT_ROOT/.agents/project-agent-factory/runs/$(date -u +%Y%m%d_%H%M%S)"
+RUN_BASE="${PAF_RUN_BASE:-$PROJECT_ROOT/.agents/project-agent-factory/runs}"
+RUN_DIR="$RUN_BASE/$(date -u +%Y%m%d_%H%M%S)"
 mkdir -p "$RUN_DIR" "$PROJECT_ROOT/.codex/agents"
+
+WRITE_PROBE="$RUN_DIR/.write_probe"
+if ! : > "$WRITE_PROBE" 2>/dev/null; then
+  echo "ERR: run_dir_not_writable=$RUN_DIR"
+  echo "HINT: 권한/샌드박스 상태를 점검하거나 PAF_RUN_BASE를 쓰기 가능한 경로로 지정하세요."
+  exit 1
+fi
+rm -f "$WRITE_PROBE"
+
 echo "project_root=$PROJECT_ROOT"
+echo "run_dir=$RUN_DIR"
 ```
 
 이후 단계의 모든 상대경로는 `PROJECT_ROOT` 기준으로 해석합니다.
+
+Step 0 fail-fast 규칙:
+- `RUN_DIR` 생성 또는 write probe 실패 시 즉시 중단합니다.
+- 권한 이슈를 우회하려고 프로젝트 루트 밖 임의 경로를 사용하지 말고, `PAF_RUN_BASE`를 명시적으로 설정해 재실행합니다.
 
 ## Step 0.5) Trusted 프로젝트 preflight (`trust_preflight.md`)
 
@@ -59,6 +74,7 @@ EOF
 - `trust_status`는 템플릿 문자열이 아니라 `trusted|untrusted|unknown` 중 하나의 실제 값으로 확정해야 합니다.
 - `trust_status=trusted` + Step 3.5 통과 전에는 Step 4를 수행하지 않습니다.
 - `untrusted|unknown`이면 Step 4(반영)를 건너뛰고, Step 5를 `apply_mode=plan_only`로 수행합니다.
+- trust 확인 정규식에서 `\s`는 휴대성이 떨어질 수 있으므로 `awk/sed`에서는 `[[:space:]]`를 사용합니다.
 
 ## Step 1) 프로젝트 분석 (`project_profile.md`)
 
@@ -82,13 +98,14 @@ EOF
 
 분석 후 `references/agent-role-patterns.md`를 읽고 역할 후보를 추립니다.
 
-## Step 2) 공식 문서 + GitHub/인터넷 사례 검증 (`source_review.tsv`)
+## Step 2) 공식 문서 + GitHub/인터넷 사례 검증 (`source_review.tsv`, `source_probe.tsv`)
 
 먼저 아래 레퍼런스를 읽습니다.
 - `references/codex-multi-agent-notes.md`
 - `references/multi-agent-case-sources.md`
 
 그 다음 실제 원문 링크를 열람하고 `source_review.tsv`를 작성합니다.
+연결성/본문 유효성 증빙은 `source_probe.tsv` + `source_evidence/*.md`로 별도 남깁니다.
 
 `source_review.tsv`의 헤더/컬럼 규칙/품질 기준은
 `references/multi-agent-case-sources.md`의
@@ -99,12 +116,29 @@ EOF
 
 ```bash
 NOW_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+mkdir -p "$RUN_DIR/source_evidence"
+
 cat > "$RUN_DIR/source_review.tsv" <<TSV
 source_id	source_type	url	checked_at_utc	relevance_note	key_constraints
 official-1	official	https://developers.openai.com/codex/multi-agent	$NOW_UTC	multi_agent 기능 플래그 및 에이전트 등록 키 검증	experimental 기능/버전 차이 확인 필요
 github-1	github	https://github.com/openai/codex/pull/11917	$NOW_UTC	config_file 분리형 role 구성 사례 검증	PR 기준이므로 현재 CLI 버전과 교차 확인 필요
 web-1	web	https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/ai-agent-design-patterns	$NOW_UTC	역할 분해/오케스트레이션 패턴 참고	Codex 설정 키의 1차 근거로 사용하지 않음
 TSV
+
+cat > "$RUN_DIR/source_probe.tsv" <<TSV
+source_id	http_status	final_url	body_not_found	evidence_relpath	checked_at_utc	probe_note
+official-1	200	https://developers.openai.com/codex/multi-agent	no	source_evidence/official-1.md	$NOW_UTC	문서 핵심 섹션 열람 완료
+github-1	200	https://github.com/openai/codex/pull/11917	no	source_evidence/github-1.md	$NOW_UTC	PR 변경 맥락/설정 키 확인
+web-1	200	https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/ai-agent-design-patterns	no	source_evidence/web-1.md	$NOW_UTC	역할 분해 패턴 참고 내용 확인
+TSV
+
+cat > "$RUN_DIR/source_evidence/official-1.md" <<'MD'
+# Source Evidence: official-1
+- fetch_method: browser/manual
+- http_status: 200
+- body_not_found: no
+- evidence_note: multi_agent 설정 관련 본문 섹션 확인
+MD
 ```
 
 ## Step 3) 멀티 에이전트 계획 생성 (`agent_plan.tsv`)
@@ -169,11 +203,45 @@ cut -f1 "$RUN_DIR/source_review.tsv" | tail -n +2 | sort -u > "$RUN_DIR/source_i
 rg -o '(official|github|web)-[0-9]+' "$RUN_DIR/agent_plan.tsv" | sort -u > "$RUN_DIR/reason_source_ids.txt"
 comm -23 "$RUN_DIR/reason_source_ids.txt" "$RUN_DIR/source_ids.txt" > "$RUN_DIR/missing_source_ids.txt"
 test ! -s "$RUN_DIR/missing_source_ids.txt"
+
+awk -F'\t' '
+BEGIN {
+  expected="source_id\thttp_status\tfinal_url\tbody_not_found\tevidence_relpath\tchecked_at_utc\tprobe_note"
+}
+NR==1 {
+  if ($0 != expected) { print "ERR source_probe_header_mismatch"; bad=1 }
+  next
+}
+{
+  if (NF != 7) { print "ERR source_probe_col_count line=" NR; bad=1; next }
+  if ($1 !~ /^(official|github|web)-[0-9]+$/) { print "ERR source_probe_id line=" NR " value=" $1; bad=1 }
+  if ($2 !~ /^(blocked|[1-5][0-9][0-9])$/) { print "ERR source_probe_http_status line=" NR " value=" $2; bad=1 }
+  if ($4 !~ /^(yes|no|blocked)$/) { print "ERR source_probe_body_not_found line=" NR " value=" $4; bad=1 }
+  if ($5 !~ /^source_evidence\/[A-Za-z0-9._-]+\.md$/) { print "ERR source_probe_evidence_relpath line=" NR " value=" $5; bad=1 }
+  if ($6 !~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$/) { print "ERR source_probe_checked_at line=" NR " value=" $6; bad=1 }
+  if (++sid[$1] > 1) { print "ERR source_probe_duplicate_source_id=" $1; bad=1 }
+  if ($2 ~ /^2/ && $4 == "yes") { print "ERR source_probe_invalid_not_found line=" NR; bad=1 }
+}
+END { exit bad ? 1 : 0 }
+' "$RUN_DIR/source_probe.tsv"
+
+cut -f1 "$RUN_DIR/source_probe.tsv" | tail -n +2 | sort -u > "$RUN_DIR/probe_source_ids.txt"
+comm -3 "$RUN_DIR/source_ids.txt" "$RUN_DIR/probe_source_ids.txt" > "$RUN_DIR/source_probe_id_diff.txt"
+test ! -s "$RUN_DIR/source_probe_id_diff.txt"
+
+awk -F'\t' 'NR>1 { print $5 }' "$RUN_DIR/source_probe.tsv" \
+  | while IFS= read -r rel; do
+      test -f "$RUN_DIR/$rel" || { echo "ERR missing_evidence_file=$rel"; exit 1; }
+    done
 ```
 
 ## Step 4) 계획 반영 (직접 파일 편집)
 
 자동 스크립트 없이 아래를 직접 반영합니다.
+
+적용 방식:
+- `apply_patch`를 우선 사용하되, 환경 제약으로 실패하면 `cat > file`, `rm`, `mv`로 대체 반영할 수 있습니다.
+- 반영 방식과 무관하게 Step 5 검증을 동일하게 통과해야 합니다.
 
 사전 조건:
 - `trust_preflight.md`의 `trust_status=trusted`가 확인된 경우에만 실행합니다.
@@ -235,6 +303,7 @@ Step 5는 항상 수행합니다.
 검증 체크:
 - `trust_preflight.md`의 trust 상태와 실제 수행 범위가 일치하는지 확인
 - 모든 생성/갱신 파일 경로가 `<project-root>/.codex/` 하위인지 확인
+- `source_probe.tsv`의 `source_id`가 `source_review.tsv`와 일치하고, `evidence_relpath` 실파일이 존재하는지 확인
 - `apply_mode=full_apply`인 경우에만 아래를 추가 확인:
   - `.codex/config.toml`에 `multi_agent = true` 존재 확인
   - managed block의 agent 목록과 `agent_plan.tsv`가 일치하는지 확인
@@ -243,6 +312,7 @@ Step 5는 항상 수행합니다.
 권장 확인 명령:
 
 ```bash
+# portability note: awk/sed 정규식에서는 \s 대신 [[:space:]]를 사용합니다.
 rg -n '^-\\s+trust_status:\\s+(trusted|untrusted|unknown)$' "$RUN_DIR/trust_preflight.md"
 ! rg -n '^-\\s+trust_status:\\s+<set_after_check:' "$RUN_DIR/trust_preflight.md"
 if [ -f .codex/config.toml ]; then
@@ -252,7 +322,14 @@ else
   echo "INFO: .codex/config.toml not found (plan_only 경로일 수 있음)"
 fi
 rg -n '^# managed_by=project-agent-factory$|^model\s*=|^model_reasoning_effort\s*=|^sandbox_mode\s*=|^developer_instructions\s*=' .codex/agents -g '*.toml' || true
+awk -F'\t' 'NR>1 && $2 ~ /^2/ && $4 == "yes" { bad=1 } END { exit bad ? 1 : 0 }' "$RUN_DIR/source_probe.tsv"
+awk -F'\t' 'NR>1 { print $5 }' "$RUN_DIR/source_probe.tsv" \
+  | while IFS= read -r rel; do
+      test -f "$RUN_DIR/$rel" || { echo "ERR missing_evidence_file=$rel"; exit 1; }
+    done
 ```
+
+템플릿 파일 생성 시 백틱/`$()` 치환 오염을 막기 위해 single-quoted heredoc(`<<'MD'`)을 사용합니다.
 
 `scope_validation.md` 템플릿:
 
@@ -288,6 +365,8 @@ run_dir: <path>
 ## 2) Source Verification Summary
 - official/github/web 각 1개 이상 여부
 - blocked 항목 여부
+- `source_probe.tsv`의 HTTP/본문 유효성 결과 요약
+- `source_evidence` 누락 여부
 
 ## 3) Planned Agents
 - agent_id, priority, reason(source_id 포함) 요약

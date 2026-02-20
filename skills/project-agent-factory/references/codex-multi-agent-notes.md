@@ -27,6 +27,9 @@
 - 적용 모드 원칙: `untrusted|unknown`이면 Step 4를 생략하고 `plan_only` 보고(`scope_validation.md`, `apply_report.md`)를 남깁니다.
 - 추적성 원칙: 왜 해당 에이전트를 만들었는지 `agent_plan.tsv`의 `reason(source_id 포함)`에 남깁니다.
 - 안전 원칙: 생성/갱신/삭제 경로를 모두 기록하고, 프로젝트 루트 바깥 변경이 없는지 `scope_validation.md`로 검증합니다.
+- 쓰기 프리플라이트 원칙: Step 0에서 `RUN_DIR` write probe를 수행하고 실패 시 즉시 중단합니다.
+- 적용 fallback 원칙: `apply_patch` 실패는 비치명으로 보고 `cat > file`/`rm`/`mv` 대체를 허용하되, Step 5 검증은 동일하게 수행합니다.
+- 정규식 휴대성 원칙: `awk/sed` 정규식에서는 `\s` 대신 `[[:space:]]`를 사용합니다.
 
 ## 수동 검증 체크
 
@@ -34,6 +37,7 @@
 - `.codex/config.toml`에 managed block이 있고 `agent_plan.tsv`와 엔트리 수/ID가 일치하는지 확인
 - 각 `[agents."<id>"]`의 `config_file`이 `agents/*.toml` 형식인지 확인
 - Step 3.5 제약(헤더/빈값/중복/패턴/enum/source_id 연결성)을 통과했는지 확인
+- `source_probe.tsv`와 `source_evidence/*.md`가 존재하고 `source_id`/경로 매핑이 맞는지 확인
 - 각 역할 파일에 `model`, `model_reasoning_effort`, `sandbox_mode`, `developer_instructions`가 존재하는지 확인
 - stale managed 파일이 제거되었는지 확인
 - zsh no-match 회피를 위해 `.codex/agents/*.toml` 글롭 대신 `rg ... .codex/agents -g '*.toml'` 형식을 사용
